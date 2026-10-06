@@ -83,6 +83,8 @@ func ChannelType2APIType(channelType int) (int, bool) {
 		apiType = constant.APITypeNewAPI
 	case constant.ChannelTypeTypeSafe:
 		apiType = constant.APITypeTypeSafe
+	case constant.ChannelTypeMaxKB:
+		apiType = constant.APITypeMaxKB
 	}
 	if apiType == -1 {
 		// Task plugin channels are served by the task relay and must never

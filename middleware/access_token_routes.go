@@ -41,6 +41,29 @@ func accessTokenScopeRule(scope string) accessTokenRouteRule {
 // Casbin-guarded routes declare themselves through
 // DeclareAccessTokenPermissionRoute when they are registered.
 var accessTokenRouteRules = map[string]accessTokenRouteRule{
+	// BelloBuddy 配置与执行只接受完整产品会话，不接受 PAT。
+	"GET /api/bellobuddy/capabilities":                            accessTokenSessionRule,
+	"GET /api/bellobuddy/plans":                                   accessTokenSessionRule,
+	"GET /api/bellobuddy/plans/:id":                               accessTokenSessionRule,
+	"POST /api/bellobuddy/plans":                                  accessTokenSessionRule,
+	"PUT /api/bellobuddy/plans/:id":                               accessTokenSessionRule,
+	"POST /api/bellobuddy/accounts/:accountKey/jobs/sync":         accessTokenSessionRule,
+	"GET /api/bellobuddy/accounts/:accountKey/jobs/config":        accessTokenSessionRule,
+	"PUT /api/bellobuddy/accounts/:accountKey/jobs/:jobId/config": accessTokenSessionRule,
+	"PUT /api/bellobuddy/accounts/:accountKey/jobs/config/batch":  accessTokenSessionRule,
+	"POST /api/bellobuddy/accounts/:accountKey/runtime-config":    accessTokenSessionRule,
+	"GET /api/bellobuddy/admin/plans":                             accessTokenSessionRule,
+	"GET /api/bellobuddy/admin/plans/:id":                         accessTokenSessionRule,
+	"POST /api/bellobuddy/admin/plans":                            accessTokenSessionRule,
+	"POST /api/bellobuddy/admin/plans/import":                     accessTokenSessionRule,
+	"PUT /api/bellobuddy/admin/plans/:id":                         accessTokenSessionRule,
+	"GET /api/bellobuddy/admin/job-bindings":                      accessTokenSessionRule,
+	"GET /api/bellobuddy/admin/job-bindings/candidates":           accessTokenSessionRule,
+	"POST /api/bellobuddy/admin/job-bindings":                     accessTokenSessionRule,
+	"PUT /api/bellobuddy/admin/job-bindings/:id":                  accessTokenSessionRule,
+	"PUT /api/bellobuddy/admin/job-bindings/:id/jobs":             accessTokenSessionRule,
+	"POST /api/bellobuddy/ai/screen":                              accessTokenSessionRule,
+	"POST /api/bellobuddy/ai/reply":                               accessTokenSessionRule,
 	// router/api-router.go: top level
 	"GET /api/models":                     accessTokenScopeRule("profile:read"),
 	"GET /api/status/test":                accessTokenScopeRule("log:read"),

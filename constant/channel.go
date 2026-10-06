@@ -62,6 +62,7 @@ const (
 	ChannelTypeVLLM           = 62
 	ChannelTypeSGLang         = 63
 	ChannelTypeTypeSafe       = 64
+	ChannelTypeMaxKB          = 65
 	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
@@ -134,6 +135,7 @@ var ChannelBaseURLs = []string{
 	"",                                          //62
 	"",                                          //63
 	"https://api.typesafe.ai",                   //64
+	"",                                          //65 MaxKB uses an administrator-configured deployment
 }
 
 func GetChannelBaseURL(channelType int) string {
@@ -145,6 +147,7 @@ func GetChannelBaseURL(channelType int) string {
 
 var ChannelTypeNames = map[int]string{
 	ChannelTypeTypeSafe:       "TypeSafe AI",
+	ChannelTypeMaxKB:          "MaxKB",
 	ChannelTypeUnknown:        "Unknown",
 	ChannelTypeOpenAI:         "OpenAI",
 	ChannelTypeMidjourney:     "Midjourney",

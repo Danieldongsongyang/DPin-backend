@@ -585,6 +585,13 @@ func TokenAuth() func(c *gin.Context) {
 		}
 
 		allowIps := token.GetIpLimits()
+		if token.ManagedBy != "" {
+			identity, ok := GetSessionAuthIdentity(c)
+			if token.ManagedBy != model.TokenManagedByBelloBuddy || !ok || identity.UserID != token.UserId || !c.GetBool("bello_relay_internal") {
+				abortWithOpenAiMessage(c, http.StatusForbidden, "应用内部凭据只能用于受控产品会话", types.ErrorCodeAccessDenied)
+				return
+			}
+		}
 		if len(allowIps) > 0 {
 			clientIp := c.ClientIP()
 			logger.LogDebug(c, "Token has IP restrictions, checking client IP %s", clientIp)

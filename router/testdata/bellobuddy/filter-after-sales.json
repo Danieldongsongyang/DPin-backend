@@ -1,0 +1,90 @@
+{
+  "disabled": false,
+  "builtin": false,
+  "scope": "company",
+  "scope_value": [],
+  "created_at": "2026-09-23T07:02:37.217000",
+  "updated_at": "2026-09-23T07:02:37.263000",
+  "id": "6ab3798d5bb2ebb190eb01f7",
+  "schema_defs": [
+    "FilterDef"
+  ],
+  "user": {
+    "id": "6ab1124d40e3fed6251ff0a4"
+  },
+  "owned_company": {
+    "id": "6ab1124e40e3fed6251ff0aa"
+  },
+  "updated_by": {
+    "id": "6ab1124d40e3fed6251ff0a4"
+  },
+  "name": "售后主管",
+  "any_fails": [
+    {
+      "conditions": [
+        {
+          "ages": [
+            {
+              "max": 23,
+              "exclusive_min": false,
+              "exclusive_max": true
+            }
+          ]
+        }
+      ],
+      "desc": "[\"年龄: 小于 23 岁\"]"
+    },
+    {
+      "conditions": [
+        {
+          "ages": [
+            {
+              "min": 30,
+              "exclusive_min": true,
+              "exclusive_max": false
+            }
+          ]
+        }
+      ],
+      "desc": "[\"年龄: 大于 30 岁\"]"
+    },
+    {
+      "conditions": [
+        {
+          "edu_nature": [
+            "非全日制"
+          ],
+          "edu_nature_must_all_search_by_relation": true
+        }
+      ],
+      "desc": "[\"教育性质: 非全日制\"]"
+    }
+  ],
+  "any_passes": [],
+  "version": 1,
+  "snapshot": {
+    "id": "6ab3798d5bb2ebb190eb01f8"
+  },
+  "visibility": "private",
+  "enable_quick_screening": true,
+  "enable_ai_screening": true,
+  "ai_screening_mode": "level",
+  "ai_screening_guidance": "岗位核心要求：必须有售后经验。\n\n硬性淘汰条件（符合任意一条，直接淘汰）：\n1. 无任何售后相关经历：简历中完全没有提及任何与售后、客户支持、技术支持、维修、退换货、投诉处理、客户服务等相关的工作或项目经历。\n\n匹配度判断指南：\n- 不合适：简历中没有任何售后相关经历；经历完全属于销售、研发、生产、行政等与售后无关的领域。\n- 一般：简历中提及了售后经历，但描述非常模糊，例如仅写“负责售后工作”，无具体职责、成果或时长；售后经历是兼职、实习或短期项目，且与全职岗位的深度要求不符；售后经历属于其他行业，但目标岗位行业为软件/IT售后，且候选人无相关行业背景。\n- 推荐：简历中明确列出“售后工程师”、“技术支持”、“客户服务专员”等岗位名称，且有 1 年以上相关经验；售后经历描述具体，包含处理客户投诉、故障排查、维修/更换、客户满意度提升、售后流程优化等职责；有量化成果；售后经历与目标岗位行业或产品高度相关。\n\n输出等级定义：high=推荐，medium=一般，low=不合适。只能依据简历中明确出现的信息判断；没有证据不能视为具备售后经验。",
+  "ai_screening_criteria": {
+    "levels": [
+      "medium",
+      "low"
+    ],
+    "five_point_scale": {
+      "threshold": 3,
+      "condition": "BELOW"
+    },
+    "hundred_point_scale": {
+      "threshold": 70,
+      "condition": "BELOW"
+    }
+  },
+  "ai_screening_summary_length": "精简",
+  "recruitment_type": "social_recruit",
+  "source": "beiliao"
+}

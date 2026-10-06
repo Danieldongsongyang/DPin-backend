@@ -5,6 +5,7 @@ type ChannelPinSource string
 const (
 	PinSourceToken      ChannelPinSource = "token"       // Rank 0, highest
 	PinSourceOriginTask ChannelPinSource = "origin_task" // Rank 10
+	PinSourceBelloBuddy ChannelPinSource = "bellobuddy"
 )
 
 const (
@@ -39,10 +40,12 @@ const (
 	FilterRequestPath        ChannelFilterKind = "request_path"
 	FilterTaskPluginIdentity ChannelFilterKind = "task_plugin_identity"
 	FilterResponsesWebSocket ChannelFilterKind = "responses_websocket"
+	FilterChannelType        ChannelFilterKind = "channel_type"
 )
 
 type ChannelFilter struct {
 	Kind                   ChannelFilterKind
+	ChannelType            int
 	RequestPath            string
 	TaskPluginKey          string
 	TaskPluginKeys         []string

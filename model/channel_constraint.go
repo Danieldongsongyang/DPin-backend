@@ -9,6 +9,7 @@ import (
 
 var filterEvalOrder = []dto.ChannelFilterKind{
 	dto.FilterRequestPath,
+	dto.FilterChannelType,
 	dto.FilterTaskPluginIdentity,
 	dto.FilterResponsesWebSocket,
 }
@@ -89,12 +90,17 @@ func candidatePassesKindFilters(ch *Channel, exists bool, modelName string, kind
 
 func channelMatchesFilter(ch *Channel, modelName string, filter dto.ChannelFilter) bool {
 	switch filter.Kind {
+	case dto.FilterChannelType:
+		return filter.ChannelType > 0 && ch.Type == filter.ChannelType
 	case dto.FilterRequestPath:
 		if filter.RequestPath == "" {
 			return true
 		}
 		if ch.Type == constant.ChannelTypeTypeSafe {
 			return filter.RequestPath == "/v1/systemone"
+		}
+		if ch.Type == constant.ChannelTypeMaxKB {
+			return filter.RequestPath == "/v1/chat/completions"
 		}
 		if !constant.IsAdvancedCustomChannel(ch.Type) {
 			return true

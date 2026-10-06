@@ -138,6 +138,12 @@ export function useSidebarData(): SidebarData {
             icon: Radio,
           },
           {
+            title: t('BelloBuddy robot bindings'),
+            url: '/bellobuddy',
+            icon: Users,
+            requiredRole: ROLE.ADMIN,
+          },
+          {
             title: t('Models'),
             url: '/models/metadata',
             icon: Box,

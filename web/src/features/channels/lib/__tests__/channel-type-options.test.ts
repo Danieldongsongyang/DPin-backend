@@ -22,11 +22,19 @@ import {
   CHANNEL_TYPE_OPTIONS,
   CHANNEL_TYPE_TASK_PLUGIN,
   CHANNEL_TYPE_TYPESAFE,
+  CHANNEL_TYPE_MAXKB,
   MODEL_FETCHABLE_TYPES,
   channelTypeOptionsForTaskPluginBind,
 } from '../../constants'
 
 describe('channel type options for task plugin bind', () => {
+  test('shows MaxKB without offering unsupported upstream model discovery', () => {
+    expect(CHANNEL_TYPE_OPTIONS).toContainEqual({
+      value: CHANNEL_TYPE_MAXKB,
+      label: 'MaxKB',
+    })
+    expect(MODEL_FETCHABLE_TYPES.has(CHANNEL_TYPE_MAXKB)).toBe(false)
+  })
   test('shows TypeSafe as a built-in text channel with upstream model discovery', () => {
     expect(CHANNEL_TYPE_OPTIONS).toContainEqual({
       value: CHANNEL_TYPE_TYPESAFE,

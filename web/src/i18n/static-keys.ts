@@ -19,6 +19,22 @@ For commercial licensing, please contact support@quantumnous.com
 // Static translation keys that don't get picked up by the t('...') regex.
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
+  'MaxKB',
+  'Connect to MaxKB applications with actual token usage',
+  'MaxKB deployment address',
+  'MaxKB application API key',
+  'Map each logical model to a MaxKB application UUID',
+  'Map each logical model to a MaxKB application UUID. Only non-streaming text turns and verified upstream usage are supported.',
+  'BelloBuddy public plans',
+  'Read BelloBuddy public plans',
+  'View public recruitment and communication plans, including disabled plans.',
+  'Manage BelloBuddy public plans',
+  'Create and update public recruitment and communication plans.',
+  'BelloBuddy job bindings',
+  'Read BelloBuddy job bindings',
+  'View recruitment job candidates and shared bot bindings.',
+  'Manage BelloBuddy job bindings',
+  'Confirm same-job mappings and configure shared bot channel references.',
   'Task usage metadata is unavailable. Pricing details cannot be displayed.',
   'This expression cannot be expanded into a price table. View the original expression below.',
   'This operation is only supported for vLLM or SGLang channels',

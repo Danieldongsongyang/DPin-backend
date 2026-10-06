@@ -6,6 +6,8 @@ import "github.com/QuantumNous/new-api/constant"
 func GetEndpointTypesByChannelType(channelType int, modelName string) []constant.EndpointType {
 	var endpointTypes []constant.EndpointType
 	switch channelType {
+	case constant.ChannelTypeMaxKB:
+		return []constant.EndpointType{constant.EndpointTypeOpenAI}
 	case constant.ChannelTypeTypeSafe:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeTypeSafe}
 	case constant.ChannelTypeJina:

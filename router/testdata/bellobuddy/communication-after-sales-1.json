@@ -1,0 +1,117 @@
+{
+  "disabled": false,
+  "builtin": false,
+  "scope": "company",
+  "scope_value": [],
+  "created_at": "2026-09-23T07:12:13.274000",
+  "updated_at": "2026-09-23T07:15:42.124000",
+  "id": "local-after-sales-1",
+  "schema_defs": [
+    "BeiliaoConfig"
+  ],
+  "user": {
+    "id": "6ab1124d40e3fed6251ff0a4"
+  },
+  "owned_company": {
+    "id": "6ab1124e40e3fed6251ff0aa"
+  },
+  "updated_by": {
+    "id": "6ab1124d40e3fed6251ff0a4"
+  },
+  "scheme_name": "售后方案1",
+  "position_background_info": "公司情况 海一云商（钉钉组织主体），一家以直播电商 + 新零售为主业的集团化公司，业务横跨电商运营、客服、仓储物流、质检、售后与线下门店体系，负责人陈保平。规模较大，仅一级部门/中心就有 20 多个。\n\n部门情况 职能中心：总裁办、集团财务中心、集团人力资源中心、集团综合服务中心、集团中台运营中心、集团投融资中心、集团内控中心、集团行政外联中心、集团品牌中心、集团文化中心。 业务中心：集团新零售战略中心、集团供应链管理中心、集团数智运营中心、集团AI运营中心（我所在部门）、集团赠返运营中心、集团仓储物流中心、集团售后运营中心、集团质检运营中心。 事业部/体系：电商体系（海纳电商一~五部、海创电商、益美云科技、米乐科技、信必达科技、海纳艺术集团、云酒科技、川云科技、跨境B2B项目）、线下体系（弘毅实业、意海科技、博海科技、海天科技），另有百川电商学苑、律师事务所等。\n\n工作环境 总部为独立写字楼办公（打卡点覆盖「一楼大厅」至 24 楼以上楼层门禁），办公+门店+仓储多点环境；一线岗位（客服/门店/仓储）为排班作业环境。\n\n工作内容 集团核心是电商直播运营与新零售交付，典型岗位方向包括：电商/直播运营、客服、供应链与仓储物流、质检、售后、门店销售与运营、以及 AI/数智运营等中后台职能。〔具体到某个招聘岗位的职责描述，钉钉里没有，需你按岗位补充〕\n\n工作地点 总部办公楼（≥24 层写字楼）为主；线下门店/专柜多地分布——班次中出现「新乡万达」等异地商场门店，说明有跨城市线下网点。〔门店覆盖城市完整清单我账号看不到，需你补充〕\n\n工作时间 职能/办公室岗标准班次 8:30–18:30（含午休，属排班制）。一线岗位按各自班次执行。\n\n倒班制度 实行强排班 / 倒班制，班次非常多：从早 5:30（如「0530至1330班次」「0530至1330洗护日化班次」）到夜间、跨零点班（如「0点至班次」「12点至9点班次」「10点至21点班次」）都有，且细分客服班、门店班（如「13点新乡万达班次」）等。门店/客服/仓储类岗位需按排表轮班。\n\n加班规则 系统内并存 3 套加班计算口径：①以审批时间计算加班；②以打卡时间计算加班；③审批后以打卡时间计算加班。即加班需走审批流，并按审批/打卡时间核算。（考勤用考勤机+手机打卡，每月有「考勤确认单」）\n\n薪酬情况 视情况而定\n\n休假规定 〔无明文政策可读〕可确认公司 OA 内有完整的请假 / 补卡 / 出差外出审批流。年假、大小周/双休、调休等具体规则需你补充。\n\n五险一金和福利情况 有五险\n\n吃住情况 〔钉钉内检索不到〕餐补/食堂/员工宿舍/住宿补贴等需你补充。\n\n其他常见问题 可先放的真实信息：工作地点在总部写字楼（多层）＋各地门店；一线岗需倒班排班、含跨零点夜班；加班走审批并按审批/打卡核算；每月有考勤确认与电子工资条。其余高频问答（如是否双休、试用期时长与考核、是否包住等）钉钉无明文，需你补充。",
+  "wechat_exchange_reply_phrase": {
+    "allow_ai_variation": false,
+    "text": "",
+    "ai_variation_text": [],
+    "image_url": "",
+    "send_address": false
+  },
+  "candidate_unresponsive_timeout": 3,
+  "skip_delivered_toggle": false,
+  "skip_delivered_timeout": 1,
+  "direct_inquiry_as_match": false,
+  "conditions_as_match": true,
+  "filter_def": {
+    "id": "6ab3798d5bb2ebb190eb01f7"
+  },
+  "non_match_action": "mark_unsuitable",
+  "auto_greeting_enabled": true,
+  "auto_initiate_after_response": true,
+  "standard_response_enabled": true,
+  "request_phone_exchange": false,
+  "request_attachment_resume": true,
+  "request_wechat_exchange": false,
+  "standard_response_settings": {
+    "allow_ai_variation": false,
+    "text": "你好,欢迎投递这个职位~",
+    "ai_variation_text": [],
+    "image_url": "",
+    "send_address": false
+  },
+  "auto_receive_delivery": "any_condition",
+  "additional_candidate_info_needed": {
+    "switch": false,
+    "text": "",
+    "questions": [],
+    "question_items": [],
+    "question_attribute_mapping": {}
+  },
+  "rejection_keywords": [],
+  "info_screening_fail_action": {
+    "mark_unsuitable": false,
+    "stop_talk": true
+  },
+  "screening_order": "resume_first",
+  "exchange_contact_after_screening_pass": true,
+  "skip_inquiry_on_abandoned_intent": true,
+  "ai_communication_style": "concise",
+  "list_addition_restrictions": {
+    "must_have_phone_number": false,
+    "must_have_attachment_resume": true,
+    "must_have_wechat": false
+  },
+  "rejection_response_strategy": "ignore",
+  "rejection_phrase": {
+    "allow_ai_variation": false,
+    "text": "",
+    "ai_variation_text": [],
+    "send_address": false
+  },
+  "mark_unprocessable_sessions": false,
+  "new_message_response_strategy": "ignore",
+  "end_session_guidance_phrase": {
+    "allow_ai_variation": false,
+    "text": "",
+    "ai_variation_text": [],
+    "send_address": false
+  },
+  "max_session_rounds": 200,
+  "request_resume_phrase": "方便发一份简历看看吗",
+  "follow_up_message_enabled": true,
+  "follow_up_duration_days": 5,
+  "daily_follow_up_count": 1,
+  "follow_up_templates": {
+    "第1天": {
+      "距打招呼30分钟后": "您好，之前给您发过咱们[岗位名称]的邀约，可能消息多被淹没了。我仔细看了您的项目经历，发现您在[某具体技能/领域]的经验与我们团队目前的业务方向非常契合。您近期有看新机会的打算吗？如果有的话，我们可以简单沟通下。",
+      "距打招呼3小时后": "冒昧再次打扰，我是[公司名]的招聘HR。关于上次提到的岗位，我们团队目前正处于快速扩张期，核心成员大多来自一线大厂，技术氛围很棒。不知道您这周哪天方便，我想针对岗位的晋升空间和福利待遇为您做个详细介绍？"
+    },
+    "第2天": {
+      "09:00之后": "您好，一直没收到您的回复，是目前不考虑变动还是对岗位有其他顾虑呢？目前这个职位的面试流程推进得很快，反馈也比较积极。因为觉得您的背景确实很优秀，还是想争取和您聊聊，您看这周三或周四下班后方便接个电话吗？"
+    },
+    "第3天": {
+      "09:00之后": "理解您平时工作可能比较忙，如果您暂时不方便投递详细简历，我们可以先加个微信简单聊聊。我这边可以先给您发一些公司的内部资料和团队介绍，您可以先了解看看。您看您的联系方式是？"
+    },
+    "第4天": {
+      "09:00之后": "您好，再次联系您是想同步一下，咱们公司近期针对该岗位提供了[如：16薪/全额公积金/远程办公机会]等福利政策，整体性价比非常高。如果您对目前的职业发展有新的规划，建议可以了解一下这个机会，您看您这周什么时间方便沟通？"
+    },
+    "第5天": {
+      "09:00之后": "多次打扰实在抱歉，猜想您近期可能比较忙。如果您目前没有换工作的计划也没关系，我们可以先保持联系，后续如果您有看机会的需求，欢迎随时找我了解。祝您工作顺利，期待未来有机会合作！"
+    }
+  },
+  "version": 3,
+  "snapshot": {
+    "id": "6ab37c9e5c4a3d883ac96e01"
+  },
+  "visibility": "private"
+}

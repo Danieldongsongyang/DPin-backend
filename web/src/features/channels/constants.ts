@@ -35,6 +35,8 @@ export const CHANNEL_TYPE_SGLANG = 63
 
 export const CHANNEL_TYPE_TYPESAFE = 64
 
+export const CHANNEL_TYPE_MAXKB = 65
+
 export const CHANNEL_TYPES = {
   0: 'Unknown',
   1: 'OpenAI',
@@ -97,6 +99,7 @@ export const CHANNEL_TYPES = {
   62: 'vLLM',
   63: 'SGLang',
   64: 'TypeSafe AI',
+  65: 'MaxKB',
 } as const
 
 export type ChannelProviderPresentation = {
@@ -184,6 +187,9 @@ export const CHANNEL_PROVIDER_PRESENTATION: Partial<
     descriptionKey:
       'Evaluate text with TypeSafe Jev and return structured answers',
   },
+  65: {
+    descriptionKey: 'Connect to MaxKB applications with actual token usage',
+  },
 } satisfies Record<
   Exclude<keyof typeof CHANNEL_TYPES, 0 | typeof CHANNEL_TYPE_TASK_PLUGIN>,
   ChannelProviderPresentation
@@ -192,7 +198,7 @@ export const CHANNEL_PROVIDER_PRESENTATION: Partial<
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
   1, 14, 24, 33, 43, 64, 3, 41, 17, 45, 25, 26, 23, 48, 60, 58, 59, 61, 42, 34,
   20, 4, 62, 40, 27, 15, 46, 18, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 22,
-  21, 44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
+  21, 44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56, 65,
 ]
 
 export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
@@ -575,9 +581,11 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
   60: 'Enter API key for this channel',
   62: 'vLLM API key, or EMPTY if authentication is disabled',
   63: 'SGLang API key, or EMPTY if authentication is disabled',
+  65: 'MaxKB application API key',
 }
 
 export const CHANNEL_TYPE_WARNINGS: Record<number, string> = {
+  65: 'Map each logical model to a MaxKB application UUID. Only non-streaming text turns and verified upstream usage are supported.',
   3: 'For channels added after May 10, 2025, no need to remove "." from model names during deployment',
   8: 'If connecting to upstream One API or New API relay projects, use OpenAI type instead unless you know what you are doing',
   37: 'Dify channels only support chatflow and agent, and agent does not support images',

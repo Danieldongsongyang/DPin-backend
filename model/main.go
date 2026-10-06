@@ -376,6 +376,12 @@ func migrateDB() error {
 		&CasbinRule{},
 		&AuthzRole{},
 		&UserAccessToken{},
+		&BelloBuddyPlan{},
+		&BelloBuddyPlanSource{},
+		&BelloBuddyAccount{},
+		&BelloBuddyJob{},
+		&BelloBuddyJobBinding{},
+		&BelloBuddyRelayIdentity{},
 	)
 	if err != nil {
 		return err

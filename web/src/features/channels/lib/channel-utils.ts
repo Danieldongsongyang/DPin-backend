@@ -57,6 +57,7 @@ export function getChannelTypeIcon(type: number): string {
     62: 'Vllm', // vLLM
     63: 'SGLang', // SGLang
     64: 'TypeSafe', // falls back to a neutral T icon when no brand icon exists
+    65: 'MaxKB',
     3: 'Azure', // Azure
 
     // Anthropic

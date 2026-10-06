@@ -104,7 +104,7 @@ func (*Adaptor) DoResponse(c *gin.Context, resp *http.Response, _ *relaycommon.R
 	if input < 0 || output < 0 || input > math.MaxInt32 || output > math.MaxInt32 || input > math.MaxInt32-output {
 		return nil, types.NewError(errors.New("TypeSafe response has invalid token usage"), types.ErrorCodeBadResponseBody)
 	}
-	usage := &dto.Usage{PromptTokens: input, CompletionTokens: output, TotalTokens: input + output}
+	usage := &dto.Usage{PromptTokens: input, CompletionTokens: output, TotalTokens: input + output, UsageSource: "upstream"}
 	c.Data(http.StatusOK, "application/json", body)
 	return usage, nil
 }

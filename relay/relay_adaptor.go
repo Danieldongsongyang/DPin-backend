@@ -23,6 +23,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/jimeng"
 	"github.com/QuantumNous/new-api/relay/channel/jina"
+	"github.com/QuantumNous/new-api/relay/channel/maxkb"
 	"github.com/QuantumNous/new-api/relay/channel/minimax"
 	"github.com/QuantumNous/new-api/relay/channel/mistral"
 	"github.com/QuantumNous/new-api/relay/channel/mokaai"
@@ -126,6 +127,8 @@ func GetAdaptor(apiType int) channel.Adaptor {
 		return &newapi.Adaptor{}
 	case constant.APITypeTypeSafe:
 		return &typesafe.Adaptor{}
+	case constant.APITypeMaxKB:
+		return &maxkb.Adaptor{}
 	}
 	return nil
 }

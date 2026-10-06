@@ -197,6 +197,10 @@ func GetTokenKey(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if token.ManagedBy != "" {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "code": "INTERNAL_CREDENTIAL", "message": "应用内部凭据不能导出"})
+		return
+	}
 	params := tokenAuditParams(c)
 	params["id"], params["name"] = token.Id, token.Name
 	common.SetContextKey(c, constant.ContextKeyTokenAuditSucceeded, true)
@@ -414,6 +418,10 @@ func UpdateToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if cleanToken.ManagedBy != "" {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "code": "INTERNAL_CREDENTIAL", "message": "应用内部凭据不能通过普通令牌接口修改"})
+		return
+	}
 	params["name"] = cleanToken.Name
 	previous := *cleanToken
 	if token.Status == common.TokenStatusEnabled {
@@ -542,6 +550,10 @@ func GetTokenKeysBatch(c *gin.Context) {
 	keysMap := make(map[int]string)
 	returnedIDs := make([]int, 0, len(tokens))
 	for _, t := range tokens {
+		if t.ManagedBy != "" {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "code": "INTERNAL_CREDENTIAL", "message": "应用内部凭据不能导出"})
+			return
+		}
 		keysMap[t.Id] = t.GetFullKey()
 		returnedIDs = append(returnedIDs, t.Id)
 	}

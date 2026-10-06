@@ -21,6 +21,7 @@ import {
   CHANNEL_TYPE_VLLM,
   CHANNEL_TYPE_SGLANG,
   CHANNEL_TYPE_TYPESAFE,
+  CHANNEL_TYPE_MAXKB,
 } from '../constants'
 
 // ============================================================================
@@ -50,6 +51,16 @@ export interface ChannelTypeConfig {
  * Configuration for each channel type
  */
 export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
+  [CHANNEL_TYPE_MAXKB]: {
+    id: CHANNEL_TYPE_MAXKB,
+    name: CHANNEL_TYPES[CHANNEL_TYPE_MAXKB],
+    icon: 'MaxKB',
+    hints: {
+      baseUrl: 'MaxKB deployment address',
+      key: 'MaxKB application API key',
+      models: 'Map each logical model to a MaxKB application UUID',
+    },
+  },
   [CHANNEL_TYPE_TYPESAFE]: {
     id: CHANNEL_TYPE_TYPESAFE,
     name: CHANNEL_TYPES[CHANNEL_TYPE_TYPESAFE],
