@@ -173,8 +173,34 @@ func ValidateBelloBuddyPlan(input BelloBuddyPlanInput) error {
 	}
 	var screening bool
 	_ = common.Unmarshal(fields["conditions_as_match"], &screening)
+	if reference, exists := fields["filter_def"]; exists {
+		var legacy struct {
+			ID string `json:"id"`
+		}
+		if common.Unmarshal(reference, &legacy) != nil || strings.TrimSpace(legacy.ID) == "" || input.FilterPlanID <= 0 {
+			return belloInvalid("沟通正文的筛选引用必须与服务端关联同时提供")
+		}
+	} else if input.FilterPlanID != 0 {
+		return belloInvalid("服务端筛选关联缺少沟通正文引用")
+	}
 	if screening && input.FilterPlanID <= 0 {
 		return belloInvalid("启用沟通筛选时必须提供服务端筛选方案关联")
+	}
+	return nil
+}
+
+// 正文保留旧 ID；服务端关联必须指向同一完整筛选对象，不能仅验证可见性。
+func validateBelloBuddyFilterReference(content common.RawMessage, filter *model.BelloBuddyPlan) error {
+	var communication struct {
+		FilterDef struct {
+			ID string `json:"id"`
+		} `json:"filter_def"`
+	}
+	var definition struct {
+		ID string `json:"id"`
+	}
+	if common.Unmarshal(content, &communication) != nil || common.UnmarshalJsonStr(filter.Content, &definition) != nil || definition.ID == "" || communication.FilterDef.ID != definition.ID {
+		return belloInvalid("沟通正文筛选引用与关联筛选方案不一致")
 	}
 	return nil
 }
@@ -298,6 +324,9 @@ func SaveBelloBuddyPlan(userID, planID int, public bool, input BelloBuddyPlanInp
 			}
 			if public && filter.Visibility != "public" {
 				return belloInvalid("公用沟通方案只能关联公用筛选方案")
+			}
+			if err := validateBelloBuddyFilterReference(input.Content, filter); err != nil {
+				return err
 			}
 		}
 		now := common.GetTimestamp()
@@ -540,7 +569,8 @@ func GetBelloBuddyRuntimeConfig(userID int, accountKey string, input BelloBuddyR
 					result.PlanAliases[id] = legacy.ID
 				}
 				if plan.FilterPlanID != 0 {
-					if _, err := GetBelloBuddyPlan(tx, userID, plan.FilterPlanID, "filter", true); err != nil {
+					filter, err := GetBelloBuddyPlan(tx, userID, plan.FilterPlanID, "filter", true)
+					if err != nil || validateBelloBuddyFilterReference(planInput.Content, filter) != nil {
 						return ErrBelloBuddyConfig
 					}
 					ids = append(ids, plan.FilterPlanID)

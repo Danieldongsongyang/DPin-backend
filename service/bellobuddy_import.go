@@ -119,6 +119,9 @@ func ImportBelloBuddyPlans(input BelloBuddyPlanImportInput) ([]BelloBuddyPlanImp
 						return err
 					}
 					item.FilterPlanID = filter.ID
+					if err := validateBelloBuddyFilterReference(item.Content, &filter); err != nil {
+						return err
+					}
 				}
 				if err := ValidateBelloBuddyPlan(item.BelloBuddyPlanInput); err != nil {
 					return err

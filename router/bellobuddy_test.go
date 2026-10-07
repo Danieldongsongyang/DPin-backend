@@ -212,6 +212,9 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 				var roundtrip service.BelloBuddyPlanDetail
 				require.NoError(t, common.Unmarshal(request(http.MethodGet, fmt.Sprintf("/plans/%d", actual.ID), tokens[0], nil, http.StatusOK), &roundtrip))
 				assert.JSONEq(t, string(raw), string(roundtrip.Content))
+				preservedRaw, err := common.Marshal(common.RawMessage(raw))
+				require.NoError(t, err)
+				assert.Equal(t, string(preservedRaw), string(roundtrip.Content), "完整 JSON 原文类型、数组顺序及缺失字段必须保留")
 				if input.Kind == "filter" {
 					actualFilterID = actual.ID
 				}
@@ -232,6 +235,18 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			require.NoError(t, common.Unmarshal(request(http.MethodPost, "/plans", tokens[0], filter, http.StatusOK), &private))
 			assert.Equal(t, users[0].Id, private.OwnerID)
 			assert.JSONEq(t, string(filter.Content), string(private.Content))
+			assert.Contains(t, string(private.Content), `"large":9007199254740993`, "不能通过浮点解析损失兼容整数精度")
+			t.Run("完整正文TEXT边界", func(t *testing.T) {
+				input := filter
+				prefix := strings.TrimSuffix(string(input.Content), "}") + `,"padding":"`
+				input.Content = common.RawMessage(prefix + strings.Repeat("x", service.BelloBuddyMaxPlanBytes-len(prefix)-2) + `"}`)
+				created, err := service.SaveBelloBuddyPlan(users[0].Id, 0, false, input)
+				require.NoError(t, err)
+				assert.Equal(t, string(input.Content), string(created.Content))
+				input.Content = common.RawMessage(prefix + strings.Repeat("x", service.BelloBuddyMaxPlanBytes-len(prefix)-1) + `"}`)
+				_, err = service.SaveBelloBuddyPlan(users[0].Id, 0, false, input)
+				assert.Equal(t, http.StatusBadRequest, service.BelloBuddyErrorResponse(err).Status)
+			})
 			privatePath := fmt.Sprintf("/plans/%d", private.ID)
 			request(http.MethodGet, privatePath, tokens[1], nil, http.StatusNotFound)
 			filter.ExpectedVersion = private.Version
@@ -241,6 +256,35 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			assert.EqualValues(t, 2, updated.Version)
 			assert.JSONEq(t, string(filter.Content), string(updated.Content))
 			request(http.MethodPut, privatePath, tokens[0], filter, http.StatusConflict)
+			// 同版本并发保存只允许一个写入者，另一请求不能覆盖赢家。
+			t.Run("并发方案CAS", func(t *testing.T) {
+				input := filter
+				input.ExpectedVersion = 0
+				created, err := service.SaveBelloBuddyPlan(users[0].Id, 0, false, input)
+				require.NoError(t, err)
+				input.ExpectedVersion = created.Version
+				start, results := make(chan struct{}), make(chan error, 2)
+				for range 2 {
+					go func() {
+						<-start
+						_, err := service.SaveBelloBuddyPlan(users[0].Id, created.ID, false, input)
+						results <- err
+					}()
+				}
+				close(start)
+				successes := 0
+				for range 2 {
+					if err := <-results; err == nil {
+						successes++
+					} else {
+						assert.ErrorIs(t, err, service.ErrBelloBuddyConflict)
+					}
+				}
+				assert.Equal(t, 1, successes)
+				var winner model.BelloBuddyPlan
+				require.NoError(t, db.First(&winner, created.ID).Error)
+				assert.EqualValues(t, 2, winner.Version)
+			})
 			filter.ExpectedVersion = 0
 			var public service.BelloBuddyPlanDetail
 			require.NoError(t, common.Unmarshal(request(http.MethodPost, "/admin/plans", tokens[2], filter, http.StatusOK), &public))
@@ -254,6 +298,20 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			assert.Nil(t, listing.Items[0].Content)
 			communication := service.BelloBuddyPlanInput{Kind: "communication", Name: "沟通", Enabled: &enabled, SchemaVersion: 1, FilterPlanID: private.ID,
 				Content: common.RawMessage(`{"id":"legacy-chat","schema_defs":["BeiliaoConfig"],"scheme_name":"沟通","disabled":false,"conditions_as_match":true,"filter_def":{"id":"legacy-filter"},"unknown":{"keep":false}}`)}
+			for _, badBody := range []string{
+				strings.Replace(string(communication.Content), `"legacy-filter"`, `"different-filter"`, 1),
+				strings.Replace(string(communication.Content), `"filter_def":{"id":"legacy-filter"},`, "", 1),
+				strings.Replace(string(communication.Content), `"filter_def":{"id":"legacy-filter"}`, `"filter_def":{}`, 1),
+				strings.Replace(string(communication.Content), `"filter_def":{"id":"legacy-filter"}`, `"filter_def":{"id":123}`, 1),
+			} {
+				bad := communication
+				bad.Content = common.RawMessage(badBody)
+				request(http.MethodPost, "/plans", tokens[0], bad, http.StatusBadRequest)
+			}
+			missingAssociation := communication
+			missingAssociation.FilterPlanID = 0
+			missingAssociation.Content = common.RawMessage(strings.Replace(string(communication.Content), `"conditions_as_match":true`, `"conditions_as_match":false`, 1))
+			request(http.MethodPost, "/plans", tokens[0], missingAssociation, http.StatusBadRequest)
 			var chat service.BelloBuddyPlanDetail
 			require.NoError(t, common.Unmarshal(request(http.MethodPost, "/plans", tokens[0], communication, http.StatusOK), &chat))
 			request(http.MethodPost, "/admin/plans", tokens[2], communication, http.StatusNotFound)
@@ -274,6 +332,10 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			assert.Equal(t, "BOT_NOT_CONFIGURED", snapshot.Jobs[0].BotStatus)
 			assert.Equal(t, "legacy-filter", snapshot.PlanAliases[private.ID])
 			assert.Equal(t, "legacy-chat", snapshot.PlanAliases[chat.ID])
+			// 数据库存量关联被破坏时也要拒绝启动，不只依赖保存时校验。
+			require.NoError(t, db.Model(&model.BelloBuddyPlan{}).Where("id = ?", chat.ID).Update("filter_plan_id", actualFilterID).Error)
+			request(http.MethodPost, "/accounts/Account/runtime-config", tokens[0], runtime, http.StatusConflict)
+			require.NoError(t, db.Model(&model.BelloBuddyPlan{}).Where("id = ?", chat.ID).Update("filter_plan_id", private.ID).Error)
 			selection.ExpectedVersion, selection.FilterMode, selection.CommunicationMode, selection.CommunicationID = 2, "pass_all", "jump", 0
 			invalid := selection
 			invalid.JobID, invalid.ExpectedVersion, invalid.FilterMode, invalid.FilterPlanID = "job", 1, "plan", private.ID
@@ -356,6 +418,16 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			assert.Equal(t, "filter", firstImport[0].Kind)
 			for _, imported := range firstImport {
 				assert.True(t, imported.Created)
+				var detail service.BelloBuddyPlanDetail
+				require.NoError(t, common.Unmarshal(request(http.MethodGet, fmt.Sprintf("/plans/%d", imported.PlanID), tokens[1], nil, http.StatusOK), &detail))
+				for _, source := range importInput.Plans {
+					if source.SourceID == imported.SourceID {
+						expected, err := common.Marshal(source.Content)
+						require.NoError(t, err)
+						assert.Equal(t, string(expected), string(detail.Content), "导入须保留完整正文 %s", source.SourceID)
+					}
+				}
+				t.Logf("真实方案映射：%s %s → id=%d/version=%d", imported.Kind, imported.SourceID, imported.PlanID, imported.Version)
 			}
 			var importedChat service.BelloBuddyPlanDetail
 			require.NoError(t, common.Unmarshal(request(http.MethodGet, fmt.Sprintf("/plans/%d", firstImport[1].PlanID), tokens[1], nil, http.StatusOK), &importedChat))
@@ -401,6 +473,53 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			require.NoError(t, db.Model(&model.BelloBuddyPlanSource{}).Count(&afterImportSources).Error)
 			assert.Equal(t, beforeImportPlans, afterImportPlans)
 			assert.Equal(t, beforeImportSources, afterImportSources)
+			// 同一来源的筛选方案已被管理员改为其他旧 ID，后续新增沟通来源不能误连。
+			inconsistentImport := importInput
+			inconsistentImport.Namespace = "inconsistent-filter-reference"
+			inconsistentImport.Plans = []service.BelloBuddyPlanImportItem{importInput.Plans[2]}
+			var inconsistent []service.BelloBuddyPlanImportResult
+			require.NoError(t, common.Unmarshal(request(http.MethodPost, "/admin/plans/import", tokens[2], inconsistentImport, http.StatusOK), &inconsistent))
+			require.NoError(t, db.Model(&model.BelloBuddyPlan{}).Where("id = ?", inconsistent[0].PlanID).Update("content", strings.Replace(string(importInput.Plans[2].Content), inconsistent[0].SourceID, "changed-legacy-id", 1)).Error)
+			inconsistentImport.Plans = []service.BelloBuddyPlanImportItem{importInput.Plans[0]}
+			request(http.MethodPost, "/admin/plans/import", tokens[2], inconsistentImport, http.StatusBadRequest)
+			var rejectedSourceCount int64
+			require.NoError(t, db.Model(&model.BelloBuddyPlanSource{}).Where("namespace = ?", inconsistentImport.Namespace).Count(&rejectedSourceCount).Error)
+			assert.EqualValues(t, 1, rejectedSourceCount, "关联不一致不应遗留导入来源占位")
+			if sourceRoot := os.Getenv("BELLOBUDDY_P2_SOURCE_ROOT"); sourceRoot != "" {
+				t.Run("真实来源CLI导入", func(t *testing.T) {
+					server := httptest.NewServer(engine)
+					defer server.Close()
+					mappingPath := filepath.Join(t.TempDir(), "mapping.json")
+					for run := range 2 {
+						command := exec.Command("node", "../tools/bellobuddy/import-plans.mjs", "--source-root", sourceRoot, "--base-url", server.URL, "--namespace", "p2-registered-live-source", "--mapping-output", mappingPath, "--apply")
+						command.Env = append(os.Environ(), "DPIN_ACCESS_TOKEN="+tokens[2])
+						output, err := command.CombinedOutput()
+						require.NoError(t, err, "%s", output)
+						var mapping struct {
+							Plans []service.BelloBuddyPlanImportResult `json:"plans"`
+						}
+						require.NoError(t, common.Unmarshal(output, &mapping))
+						require.Len(t, mapping.Plans, 3)
+						stored, err := os.ReadFile(mappingPath)
+						require.NoError(t, err)
+						assert.Equal(t, string(output), string(stored))
+						assert.NotContains(t, string(stored), tokens[2])
+						for _, entry := range mapping.Plans {
+							assert.Equal(t, run == 0, entry.Created)
+							var detail model.BelloBuddyPlan
+							require.NoError(t, db.First(&detail, entry.PlanID).Error)
+							for _, fixture := range importInput.Plans {
+								if fixture.SourceID == entry.SourceID {
+									expected, err := common.Marshal(fixture.Content)
+									require.NoError(t, err)
+									assert.Equal(t, string(expected), detail.Content, "实际来源与完整基准正文一致")
+								}
+							}
+							t.Logf("实际来源CLI，第%d次：%s %s → id=%d/version=%d，新增=%t", run+1, entry.Kind, entry.SourceID, entry.PlanID, entry.Version, entry.Created)
+						}
+					}
+				})
+			}
 			require.NoError(t, db.AutoMigrate(tables...))
 			var preserved model.BelloBuddyPlanSource
 			require.NoError(t, db.Where("plan_id = ?", firstImport[0].PlanID).First(&preserved).Error)
