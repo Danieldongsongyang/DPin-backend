@@ -171,7 +171,7 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 				"schema_version":1,"plan_kinds":["filter","communication"],
 				"selection_modes":{"filter":["plan","pass_all","skip_all"],"communication":["plan","jump"]},
 				"limits":{"max_body_bytes":2097152,"max_plan_bytes":61440,"max_jobs":200},
-				"features":{"plan_management":true,"job_configuration":true,"runtime_config":true},
+				"features":{"plan_management":true,"job_configuration":true,"runtime_config":true,"runtime_snapshot":true,"runtime_snapshot_renewal":true},
 				"ai_screen":{"available":false,"protocol":"typesafe_systemone","models":[],"code":"AI_RESOURCE_UNAVAILABLE"},
 				"ai_reply":{"available":false,"protocol":"maxkb_application","models":[],"code":"AI_RESOURCE_UNAVAILABLE"}
 			}`, string(capabilities))
@@ -1102,6 +1102,9 @@ func runBelloBuddyAIBridge(t *testing.T, db *gorm.DB, engine *gin.Engine, users 
 	assert.Zero(t, logs[3].Quota)
 	assert.Contains(t, logs[3].Content, "上游实际用量为零")
 	assert.NotContains(t, logs[3].Content, "上游没有返回计费信息")
+	t.Run("固定运行快照与续期", func(t *testing.T) {
+		runBelloBuddyRuntimeSnapshot(t, db, engine, users, sessions, filter, communication, binding, reply, received)
+	})
 	// 删除/禁用后关联保留，重新登录不能自动生成替代凭据。
 	require.NoError(t, db.Model(internal).Update("status", common.TokenStatusDisabled).Error)
 	invoke("reply", sessions[0], input, 403, nil)
@@ -1160,4 +1163,238 @@ func expireBelloBuddyReference(t *testing.T, reference string) string {
 	_, err = rand.Read(newNonce)
 	require.NoError(t, err)
 	return base64.RawURLEncoding.EncodeToString(aead.Seal(newNonce, newNonce, body, []byte("bellobuddy-maxkb-v1")))
+}
+
+// 通过实际产品路由验证旧快照继续、新读取生效，以及权限、会话、额度和机器人边界。
+func runBelloBuddyRuntimeSnapshot(t *testing.T, db *gorm.DB, engine *gin.Engine, users []model.User, sessions []string, filter, communication model.BelloBuddyPlan, binding model.BelloBuddyJobBinding, channel model.Channel, received chan common.RawMessage) {
+	t.Helper()
+	request := func(method, path, session string, body any, status int, code string) common.RawMessage {
+		t.Helper()
+		raw, err := common.Marshal(body)
+		require.NoError(t, err)
+		req := httptest.NewRequest(method, "/api/bellobuddy"+path, strings.NewReader(string(raw)))
+		req.Header.Set("Authorization", "Bearer "+session)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+		require.Equal(t, status, w.Code, w.Body.String())
+		var response struct {
+			Data common.RawMessage `json:"data"`
+			Code string            `json:"code"`
+		}
+		require.NoError(t, common.Unmarshal(w.Body.Bytes(), &response))
+		if code != "" {
+			assert.Equal(t, code, response.Code)
+		}
+		assert.NotContains(t, w.Body.String(), "test-upstream-secret")
+		return response.Data
+	}
+	var initialJob model.BelloBuddyJob
+	require.NoError(t, db.Where("job_hash = ?", model.BelloBuddyIdentityHash("ai-job")).First(&initialJob).Error)
+	t.Cleanup(func() {
+		require.NoError(t, db.Model(&initialJob).Updates(map[string]any{"version": initialJob.Version, "filter_mode": initialJob.FilterMode, "filter_plan_id": initialJob.FilterPlanID, "communication_mode": initialJob.CommunicationMode, "communication_id": initialJob.CommunicationID, "binding_id": initialJob.BindingID, "greeting_limit": initialJob.GreetingLimit}).Error)
+		require.NoError(t, db.Model(&filter).Updates(map[string]any{"version": filter.Version, "content": filter.Content, "visibility": filter.Visibility, "owner_id": filter.OwnerID, "enabled": filter.Enabled}).Error)
+		require.NoError(t, db.Model(&communication).Updates(map[string]any{"version": communication.Version, "content": communication.Content, "filter_plan_id": communication.FilterPlanID}).Error)
+	})
+	// AI桥接旧夹具只需路由字段；启动快照使用完整可验证正文。
+	filterContent := `{"id":"snapshot-filter","schema_defs":["FilterDef"],"name":"AI桥接测试","any_fails":[],"any_passes":[],"enable_ai_screening":true,"future":{"large":9007199254740993,"order":[false,0,null]}}`
+	chatContent := `{"id":"snapshot-chat","schema_defs":["BeiliaoConfig"],"scheme_name":"AI沟通测试","filter_def":{"id":"snapshot-filter"},"future":{"missing_preserved":true}}`
+	require.NoError(t, db.Model(&filter).Update("content", filterContent).Error)
+	require.NoError(t, db.Model(&communication).Update("content", chatContent).Error)
+	runtime := service.BelloBuddyRuntimeInput{JobIDs: []string{"ai-job"}, RunnerVersion: "snapshot-test", SchemaVersion: 1}
+	fetch := func(session string) service.BelloBuddyRuntimeConfig {
+		t.Helper()
+		var config service.BelloBuddyRuntimeConfig
+		require.NoError(t, common.Unmarshal(request("POST", "/accounts/ai-account/runtime-config", session, runtime, 200, ""), &config))
+		require.NotEmpty(t, config.SnapshotRef)
+		assert.Equal(t, config.FetchedAt+service.BelloBuddyRuntimeSnapshotTTL, config.SnapshotExpiresAt)
+		return config
+	}
+	snapshot := fetch(sessions[0])
+	require.Len(t, snapshot.Plans, 2)
+	assert.Equal(t, filterContent, string(snapshot.Plans[0].Content))
+	assert.Equal(t, chatContent, string(snapshot.Plans[1].Content))
+	assert.NotContains(t, snapshot.SnapshotRef, "snapshot-filter")
+	screen := service.BelloBuddyAIInput{SnapshotRef: snapshot.SnapshotRef, AccountKey: "ai-account", JobID: "ai-job", JobVersion: 1, SchemaVersion: 1, CandidateID: "snapshot-candidate", FilterPlanID: filter.ID, FilterVersion: 1, Request: common.RawMessage(`{"state":{},"questions":{"screen":{"type":"choice","instructions":"快照筛选","criteria":{"pass":"符合","reject":"不符"}}},"answers":{}}`)}
+	reply := screen
+	reply.Request, reply.Input = nil, "快照沟通上下文"
+	reply.CommunicationPlanID, reply.CommunicationVersion, reply.BindingVersion = communication.ID, 1, 1
+	// 获取快照后一轮刷新 Access Token 仍属同一产品会话，可继续使用。
+	identity, _, err := service.ParseDashboardAccessToken(sessions[0])
+	require.NoError(t, err)
+	_, err = service.ResolveBelloBuddyAIRoute(identity, screen, false)
+	require.NoError(t, err)
+	changedIdentity := identity
+	changedIdentity.UserAuthVersion++
+	_, err = service.ResolveBelloBuddyAIRoute(changedIdentity, screen, false)
+	require.ErrorIs(t, err, service.ErrBelloBuddySnapshotInvalid)
+	bundle, err := service.CreateLoginSession(users[0].Id, "password", "127.0.0.1", "snapshot-test")
+	require.NoError(t, err)
+	request("POST", "/ai/screen", bundle.AccessToken, screen, 409, "RUNTIME_SNAPSHOT_INVALID")
+	request("POST", "/ai/screen", sessions[1], screen, 409, "RUNTIME_SNAPSHOT_INVALID")
+	refreshConfig := fetch(bundle.AccessToken)
+	refreshed, _, err := service.RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "127.0.0.1", "snapshot-test")
+	require.NoError(t, err)
+	bundle = refreshed
+	request("POST", "/accounts/ai-account/runtime-snapshot/renew", bundle.AccessToken, map[string]string{"snapshot_ref": refreshConfig.SnapshotRef}, 200, "")
+	for _, dimension := range []string{"account", "job", "job_version", "filter_version", "tamper", "oversized"} {
+		bad := screen
+		switch dimension {
+		case "account":
+			bad.AccountKey = "other-account"
+		case "job":
+			bad.JobID = "ai-other-job"
+		case "job_version":
+			bad.JobVersion++
+		case "filter_version":
+			bad.FilterVersion++
+		case "tamper":
+			bad.SnapshotRef = "!" + bad.SnapshotRef
+		case "oversized":
+			bad.SnapshotRef = strings.Repeat("x", 513<<10)
+		}
+		request("POST", "/ai/screen", sessions[0], bad, 409, "RUNTIME_SNAPSHOT_INVALID")
+	}
+	for _, dimension := range []string{"communication_id", "communication_version", "binding_version"} {
+		bad := reply
+		switch dimension {
+		case "communication_id":
+			bad.CommunicationPlanID++
+		case "communication_version":
+			bad.CommunicationVersion++
+		case "binding_version":
+			bad.BindingVersion++
+		}
+		request("POST", "/ai/reply", sessions[0], bad, 409, "RUNTIME_SNAPSHOT_INVALID")
+	}
+	expired := screen
+	expired.SnapshotRef = retimeBelloBuddySnapshot(t, snapshot.SnapshotRef, common.GetTimestamp()-1)
+	request("POST", "/ai/screen", sessions[0], expired, 409, "RUNTIME_SNAPSHOT_EXPIRED")
+	expiredReply := reply
+	expiredReply.SnapshotRef = expired.SnapshotRef
+	request("POST", "/ai/reply", sessions[0], expiredReply, 409, "RUNTIME_SNAPSHOT_EXPIRED")
+	renewPath := "/accounts/ai-account/runtime-snapshot/renew"
+	request("POST", renewPath, sessions[0], map[string]string{"snapshot_ref": expired.SnapshotRef}, 409, "RUNTIME_SNAPSHOT_EXPIRED")
+	request("POST", renewPath, sessions[1], map[string]string{"snapshot_ref": snapshot.SnapshotRef}, 409, "RUNTIME_SNAPSHOT_INVALID")
+	request("POST", renewPath, bundle.AccessToken, map[string]string{"snapshot_ref": snapshot.SnapshotRef}, 409, "RUNTIME_SNAPSHOT_INVALID")
+	request("POST", "/accounts/other-account/runtime-snapshot/renew", sessions[0], map[string]string{"snapshot_ref": snapshot.SnapshotRef}, 409, "RUNTIME_SNAPSHOT_INVALID")
+	originalSecret := common.SessionSecret
+	common.SessionSecret = "rotated-runtime-snapshot-secret"
+	_, err = service.ResolveBelloBuddyAIRoute(identity, screen, false)
+	assert.ErrorIs(t, err, service.ErrBelloBuddySnapshotInvalid)
+	common.SessionSecret = originalSecret
+	// 普通配置、完整正文和关联均更新；本次请求仍使用签发时的版本和AI开关。
+	limit := 0
+	_, err = service.SaveBelloBuddyJobConfigs(users[0].Id, "ai-account", []service.BelloBuddyJobConfigInput{{JobID: "ai-job", ExpectedVersion: 1, FilterMode: "pass_all", CommunicationMode: "jump", GreetingLimit: &limit}})
+	require.NoError(t, err)
+	enabled := true
+	newFilter := strings.Replace(filterContent, `"enable_ai_screening":true`, `"enable_ai_screening":false`, 1)
+	_, err = service.SaveBelloBuddyPlan(users[0].Id, filter.ID, true, service.BelloBuddyPlanInput{Kind: "filter", Name: filter.Name, Enabled: &enabled, SchemaVersion: 1, ExpectedVersion: 1, Content: common.RawMessage(newFilter)})
+	require.NoError(t, err)
+	newChat := `{"id":"snapshot-chat","schema_defs":["BeiliaoConfig"],"scheme_name":"AI沟通测试","future":{"missing_preserved":false}}`
+	_, err = service.SaveBelloBuddyPlan(users[0].Id, communication.ID, true, service.BelloBuddyPlanInput{Kind: "communication", Name: communication.Name, Enabled: &enabled, SchemaVersion: 1, ExpectedVersion: 1, Content: common.RawMessage(newChat)})
+	require.NoError(t, err)
+	next := fetch(sessions[0])
+	assert.EqualValues(t, 2, next.Jobs[0].Version)
+	assert.Equal(t, "pass_all", next.Jobs[0].FilterMode)
+	assert.Equal(t, "jump", next.Jobs[0].CommunicationMode)
+	assert.Empty(t, next.Plans)
+	legacy := screen
+	legacy.SnapshotRef = ""
+	request("POST", "/ai/screen", sessions[0], legacy, 409, "VERSION_CONFLICT")
+	request("POST", "/ai/screen", sessions[0], screen, 200, "")
+	<-received
+	request("POST", "/ai/reply", sessions[0], reply, 200, "")
+	<-received
+	// 临近到期续期保持旧配置，即便数据库已保存新版正文和特殊模式。
+	nearExpiry := retimeBelloBuddySnapshot(t, snapshot.SnapshotRef, common.GetTimestamp()+60)
+	var renewed service.BelloBuddyRuntimeSnapshot
+	require.NoError(t, common.Unmarshal(request("POST", renewPath, sessions[0], map[string]string{"snapshot_ref": nearExpiry}, 200, ""), &renewed))
+	assert.Greater(t, renewed.SnapshotExpiresAt, common.GetTimestamp()+60)
+	assert.NotEqual(t, nearExpiry, renewed.SnapshotRef)
+	screen.SnapshotRef, reply.SnapshotRef = renewed.SnapshotRef, renewed.SnapshotRef
+	request("POST", "/ai/screen", sessions[0], screen, 200, "")
+	<-received
+	request("POST", "/ai/reply", sessions[0], reply, 200, "")
+	<-received
+	// 下一次选择真实新版方案后读取，AI关闭应生效；旧快照仍为开启状态。
+	_, err = service.SaveBelloBuddyJobConfigs(users[0].Id, "ai-account", []service.BelloBuddyJobConfigInput{{JobID: "ai-job", ExpectedVersion: 2, FilterMode: "plan", FilterPlanID: filter.ID, CommunicationMode: "plan", CommunicationID: communication.ID, GreetingLimit: &limit}})
+	require.NoError(t, err)
+	next = fetch(sessions[0])
+	assert.Equal(t, newFilter, string(next.Plans[0].Content))
+	assert.Equal(t, newChat, string(next.Plans[1].Content))
+	newScreen := screen
+	newScreen.SnapshotRef, newScreen.JobVersion, newScreen.FilterVersion = next.SnapshotRef, 3, 2
+	request("POST", "/ai/screen", sessions[0], newScreen, 400, "INVALID_REQUEST")
+	// 实时撤权不被旧凭证绕过；续期同样执行权限检查。
+	require.NoError(t, db.Model(&filter).Update("enabled", false).Error)
+	request("POST", "/ai/screen", sessions[0], screen, 404, "RESOURCE_NOT_FOUND")
+	request("POST", "/ai/reply", sessions[0], reply, 404, "RESOURCE_NOT_FOUND")
+	request("POST", renewPath, sessions[0], map[string]string{"snapshot_ref": screen.SnapshotRef}, 404, "RESOURCE_NOT_FOUND")
+	require.NoError(t, db.Model(&filter).Updates(map[string]any{"enabled": true, "visibility": "private", "owner_id": users[1].Id}).Error)
+	request("POST", "/ai/screen", sessions[0], screen, 404, "RESOURCE_NOT_FOUND")
+	request("POST", renewPath, sessions[0], map[string]string{"snapshot_ref": screen.SnapshotRef}, 404, "RESOURCE_NOT_FOUND")
+	require.NoError(t, db.Model(&filter).Updates(map[string]any{"visibility": "public", "owner_id": 0}).Error)
+	require.NoError(t, db.Model(&binding).Update("version", 2).Error)
+	request("POST", "/ai/reply", sessions[0], reply, 409, "BOT_BINDING_CHANGED")
+	require.NoError(t, db.Model(&binding).Update("version", 1).Error)
+	var job model.BelloBuddyJob
+	require.NoError(t, db.Where("job_hash = ?", model.BelloBuddyIdentityHash("ai-job")).First(&job).Error)
+	require.NoError(t, db.Model(&job).Update("binding_id", 0).Error)
+	request("POST", "/ai/reply", sessions[0], reply, 409, "BOT_BINDING_CHANGED")
+	require.NoError(t, db.Model(&job).Update("binding_id", binding.ID).Error)
+	oldMapping := channel.GetModelMapping()
+	require.NoError(t, db.Model(&channel).Update("model_mapping", `{"bello-test-bot":"00000000-0000-4000-8000-000000000003"}`).Error)
+	request("POST", "/ai/reply", sessions[0], reply, 409, "BOT_BINDING_CHANGED")
+	require.NoError(t, db.Model(&channel).Update("model_mapping", oldMapping).Error)
+	require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", channel.Id).Update("enabled", false).Error)
+	request("POST", "/ai/reply", sessions[0], reply, 403, "AI_RESOURCE_FORBIDDEN")
+	require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", channel.Id).Update("enabled", true).Error)
+	var owner model.User
+	require.NoError(t, db.First(&owner, users[0].Id).Error)
+	quotaBefore := owner.Quota
+	require.NoError(t, db.Model(&owner).Update("quota", 0).Error)
+	request("POST", "/ai/screen", sessions[0], screen, 403, "AI_QUOTA_EXHAUSTED")
+	request("POST", "/ai/reply", sessions[0], reply, 403, "AI_QUOTA_EXHAUSTED")
+	require.NoError(t, db.Model(&owner).Update("quota", quotaBefore).Error)
+	revoked := fetch(bundle.AccessToken)
+	revokedIdentity, _, err := service.ParseDashboardAccessToken(bundle.AccessToken)
+	require.NoError(t, err)
+	_, err = model.RevokeUserSession(users[0].Id, revokedIdentity.SessionID, "snapshot-test")
+	require.NoError(t, err)
+	bad := screen
+	bad.SnapshotRef, bad.JobVersion, bad.FilterVersion = revoked.SnapshotRef, 3, 2
+	request("POST", "/ai/screen", bundle.AccessToken, bad, 401, "")
+	request("POST", renewPath, bundle.AccessToken, map[string]string{"snapshot_ref": revoked.SnapshotRef}, 401, "")
+	require.NoError(t, db.Delete(&job).Error)
+	request("POST", "/ai/screen", sessions[0], screen, 404, "RESOURCE_NOT_FOUND")
+	request("POST", renewPath, sessions[0], map[string]string{"snapshot_ref": screen.SnapshotRef}, 404, "RESOURCE_NOT_FOUND")
+	require.NoError(t, db.Create(&job).Error)
+	assert.Empty(t, received, "所有拒绝分支不得提交AI上游")
+}
+
+// 重签精确的服务端有效时间夹具，避免等待或修改全局时钟。
+func retimeBelloBuddySnapshot(t *testing.T, reference string, expiresAt int64) string {
+	t.Helper()
+	key := sha256.Sum256([]byte("dpin-bellobuddy-runtime-snapshot-v1\x00" + common.SessionSecret))
+	block, err := aes.NewCipher(key[:])
+	require.NoError(t, err)
+	aead, err := cipher.NewGCM(block)
+	require.NoError(t, err)
+	sealed, err := base64.RawURLEncoding.DecodeString(reference)
+	require.NoError(t, err)
+	body, err := aead.Open(nil, sealed[:aead.NonceSize()], sealed[aead.NonceSize():], []byte("bellobuddy-runtime-v1"))
+	require.NoError(t, err)
+	var fields map[string]common.RawMessage
+	require.NoError(t, common.Unmarshal(body, &fields))
+	fields["expires_at"], err = common.Marshal(expiresAt)
+	require.NoError(t, err)
+	fields["issued_at"], err = common.Marshal(expiresAt - service.BelloBuddyRuntimeSnapshotTTL)
+	require.NoError(t, err)
+	body, err = common.Marshal(fields)
+	require.NoError(t, err)
+	nonce := make([]byte, aead.NonceSize())
+	_, err = rand.Read(nonce)
+	require.NoError(t, err)
+	return base64.RawURLEncoding.EncodeToString(aead.Seal(nonce, nonce, body, []byte("bellobuddy-runtime-v1")))
 }

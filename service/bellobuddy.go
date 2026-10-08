@@ -85,11 +85,15 @@ type BelloBuddyRuntimeInput struct {
 
 type BelloBuddyRuntimeJob struct {
 	model.BelloBuddyJob
-	BotStatus         string `json:"bot_status"`
-	BotBindingVersion int64  `json:"bot_binding_version"`
+	BotStatus           string `json:"bot_status"`
+	BotBindingVersion   int64  `json:"bot_binding_version"`
+	BotChannelID        int    `json:"-"`
+	BotModel            string `json:"-"`
+	BotChannelSignature string `json:"-"`
 }
 
 type BelloBuddyRuntimeConfig struct {
+	BelloBuddyRuntimeSnapshot
 	Account       model.BelloBuddyAccount `json:"account"`
 	SchemaVersion int                     `json:"schema_version"`
 	FetchedAt     int64                   `json:"fetched_at"`
@@ -581,7 +585,20 @@ func GetBelloBuddyRuntimeConfig(userID int, accountKey string, input BelloBuddyR
 				return err
 			}
 			// 未绑定或渠道不可用不阻止本地筛选；AI 入口仍需实时校验权限和额度。
-			result.Jobs = append(result.Jobs, BelloBuddyRuntimeJob{BelloBuddyJob: job, BotStatus: status, BotBindingVersion: bindingVersion})
+			runtimeJob := BelloBuddyRuntimeJob{BelloBuddyJob: job, BotStatus: status, BotBindingVersion: bindingVersion}
+			if status == "BOT_CONFIGURED" {
+				var binding model.BelloBuddyJobBinding
+				if err := tx.First(&binding, job.BindingID).Error; err != nil {
+					return err
+				}
+				var channel model.Channel
+				if err := tx.First(&channel, binding.ChannelID).Error; err != nil {
+					return err
+				}
+				runtimeJob.BotChannelID, runtimeJob.BotModel = binding.ChannelID, binding.Model
+				runtimeJob.BotChannelSignature = model.BelloBuddyIdentityHash(channel.GetBaseURL() + "\x00" + channel.GetModelMapping() + "\x00" + binding.Model)
+			}
+			result.Jobs = append(result.Jobs, runtimeJob)
 		}
 		return nil
 	})

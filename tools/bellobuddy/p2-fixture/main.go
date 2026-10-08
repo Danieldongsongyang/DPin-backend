@@ -1,5 +1,5 @@
-// P1/P2 隔离联调入口：只复用真实迁移、认证控制器和路由，不签发测试登录会话。
-// 仅允许临时状态目录及名称明确的本阶段测试库；不注册招聘或真实 AI 中继。
+// P1/P2/P3 隔离联调入口：复用真实迁移、认证控制器和路由，不签发测试登录会话。
+// 仅允许临时状态目录及名称明确的本阶段测试库；不配置真实 AI 渠道或招聘数据。
 package main
 
 import (
@@ -28,27 +28,29 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
 	mysqldriver "github.com/go-sql-driver/mysql"
 )
 
 func main() {
+	phase := flag.String("phase", "p2", "隔离阶段：p2 或 p3")
 	stateDir := flag.String("state-dir", "", "本阶段专用临时目录，权限 0700")
-	dsn := flag.String("dsn", "local", "仅接受回环地址的 bellobuddy_p2_startup_ 测试库")
+	dsn := flag.String("dsn", "local", "仅接受回环地址的 bellobuddy_阶段_startup_ 测试库")
 	startupOnly := flag.Bool("check-startup", false, "完整迁移三次、验证数据后退出")
 	port := flag.Int("listen-port", 34443, "回环 HTTPS 端口")
 	flag.Parse()
-	if err := run(*stateDir, *dsn, *startupOnly, *port); err != nil {
+	if err := run(*stateDir, *dsn, *startupOnly, *port, *phase); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(stateDir, dsn string, startupOnly bool, port int) error {
+func run(stateDir, dsn string, startupOnly bool, port int, phase string) error {
 	stateDir, err := filepath.Abs(stateDir)
-	if err != nil || !strings.HasPrefix(stateDir, "/private/tmp/bellobuddy-p2-") || port < 1024 || port > 65535 {
-		return fmt.Errorf("仅允许 /private/tmp/bellobuddy-p2- 前缀状态目录及非特权端口")
+	if err != nil || (phase != "p2" && phase != "p3") || !strings.HasPrefix(stateDir, "/private/tmp/bellobuddy-"+phase+"-") || port < 1024 || port > 65535 {
+		return fmt.Errorf("仅允许 /private/tmp/bellobuddy-阶段- 前缀状态目录及非特权端口")
 	}
 	if dsn != "local" {
 		var host, database, driver, tableCountQuery string
@@ -71,7 +73,7 @@ func run(stateDir, dsn string, startupOnly bool, port int) error {
 			database = parsed.DBName
 			driver, tableCountQuery = "mysql", "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()"
 		}
-		if host != "127.0.0.1" || !strings.HasPrefix(database, "bellobuddy_p2_startup_") {
+		if host != "127.0.0.1" || !strings.HasPrefix(database, "bellobuddy_"+phase+"_startup_") {
 			return fmt.Errorf("拒绝访问非本阶段回环测试库")
 		}
 		connection, err := sql.Open(driver, dsn)
@@ -111,7 +113,6 @@ func run(stateDir, dsn string, startupOnly bool, port int) error {
 	common.SessionCookieTrustedURLs = []string{fmt.Sprintf("https://127.0.0.1:%d", port)}
 	common.PasswordLoginEnabled = true
 	common.CriticalRateLimitEnable = true
-	common.PasswordLoginEncryptionEnabled, common.TurnstileCheckEnabled = false, false
 	if err := model.InitDB(); err != nil {
 		return err
 	}
@@ -134,6 +135,9 @@ func run(stateDir, dsn string, startupOnly bool, port int) error {
 	users := []model.User{
 		{Username: "p2-fixture-admin", Password: hash, Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "p2fixtureadmin", AuthVersion: 1},
 		{Username: "p2-fixture-totp", Password: hash, Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "p2fixturetotp", AuthVersion: 1},
+	}
+	if phase == "p3" {
+		users = append(users, model.User{Username: "p3-fixture-user", Password: hash, Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "p3fixtureuser", AuthVersion: 1}, model.User{Username: "p3-fixture-other", Password: hash, Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "p3fixtureother", AuthVersion: 1})
 	}
 	for i := range users {
 		if err := model.DB.Create(&users[i]).Error; err != nil {
@@ -194,7 +198,7 @@ func run(stateDir, dsn string, startupOnly bool, port int) error {
 	if err := os.WriteFile(keyPath, key, 0600); err != nil {
 		return err
 	}
-	credentials, err := common.Marshal(map[string]any{"origin": common.SessionCookieTrustedURLs[0], "admin_username": users[0].Username, "totp_username": users[1].Username, "password": password, "totp_secret": totpSecret, "certificate_sha256": fingerprint})
+	credentials, err := common.Marshal(map[string]any{"origin": common.SessionCookieTrustedURLs[0], "admin_username": users[0].Username, "totp_username": users[1].Username, "password": password, "totp_secret": totpSecret, "certificate_sha256": fingerprint, "phase": phase, "user_username": "p3-fixture-user", "other_username": "p3-fixture-other"})
 	if err != nil {
 		return err
 	}
@@ -204,15 +208,21 @@ func run(stateDir, dsn string, startupOnly bool, port int) error {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	engine.Use(middleware.DisableCache())
-	api := engine.Group("/api")
-	api.POST("/user/login", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.Login)
-	api.POST("/user/login/verify", middleware.CriticalRateLimit(), controller.VerifyLogin)
-	api.POST("/user/login/2fa", middleware.CriticalRateLimit(), controller.Verify2FALogin)
-	api.GET("/user/login/encryption-key", controller.GetPasswordEncryptionKey)
-	api.POST("/user/auth/refresh", middleware.SessionCookieOriginGuard(), middleware.CriticalRateLimit(), controller.RefreshAuth)
-	api.POST("/user/auth/logout", middleware.SessionCookieOriginGuard(), controller.AuthLogout)
-	api.GET("/user/self", middleware.UserAuth(), controller.GetSelf)
-	api.GET("/bellobuddy/capabilities", middleware.UserAuth(), middleware.BelloBuddySessionRequired(), controller.GetBelloBuddyCapabilities)
+	if phase == "p3" {
+		// 使用生产路由及其原生认证、权限、额度、限流；空测试库不配置真实AI渠道。
+		router.SetApiRouter(engine)
+	} else {
+		api := engine.Group("/api")
+		api.POST("/user/login", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.Login)
+		api.POST("/user/login/verify", middleware.CriticalRateLimit(), controller.VerifyLogin)
+		api.POST("/user/login/2fa", middleware.CriticalRateLimit(), controller.Verify2FALogin)
+		api.GET("/user/login/encryption-key", controller.GetPasswordEncryptionKey)
+		api.POST("/user/auth/refresh", middleware.SessionCookieOriginGuard(), middleware.CriticalRateLimit(), controller.RefreshAuth)
+		api.POST("/user/auth/logout", middleware.SessionCookieOriginGuard(), controller.AuthLogout)
+		api.GET("/user/self", middleware.UserAuth(), controller.GetSelf)
+		api.GET("/bellobuddy/capabilities", middleware.UserAuth(), middleware.BelloBuddySessionRequired(), controller.GetBelloBuddyCapabilities)
+	}
+	engine.GET("/sign-in", func(c *gin.Context) { c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(loginPage)) })
 	engine.GET("/login", func(c *gin.Context) { c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(loginPage)) })
 	fmt.Printf("隔离认证服务：%s/login；凭据仅见私密状态文件\n", common.SessionCookieTrustedURLs[0])
 	server := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", port), Handler: engine, ReadHeaderTimeout: 10 * time.Second}

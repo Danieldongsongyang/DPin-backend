@@ -46,7 +46,7 @@ func PrepareBelloBuddyAI(reply bool) gin.HandlerFunc {
 		}
 		for field := range fields {
 			switch field {
-			case "account_key", "job_id", "job_version", "schema_version", "candidate_id", "filter_plan_id", "filter_version", "binding_version", "request", "input", "conversation_ref":
+			case "account_key", "job_id", "job_version", "schema_version", "candidate_id", "filter_plan_id", "filter_version", "binding_version", "snapshot_ref", "communication_plan_id", "communication_version", "request", "input", "conversation_ref":
 			default:
 				abortBelloBuddyAI(c, &service.BelloBuddyError{Status: http.StatusBadRequest, Code: "INVALID_REQUEST", Message: "AI 请求包含不支持的字段"})
 				return

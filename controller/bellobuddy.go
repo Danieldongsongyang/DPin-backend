@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -66,7 +67,7 @@ func GetBelloBuddyCapabilities(c *gin.Context) {
 			"max_plan_bytes": service.BelloBuddyMaxPlanBytes,
 			"max_jobs":       service.BelloBuddyMaxJobs,
 		},
-		"features": gin.H{"plan_management": true, "job_configuration": true, "runtime_config": true},
+		"features": gin.H{"plan_management": true, "job_configuration": true, "runtime_config": true, "runtime_snapshot": true, "runtime_snapshot_renewal": true},
 		"ai_screen": gin.H{
 			"available": len(screenModels) > 0, "protocol": "typesafe_systemone", "models": screenModels, "code": screenCode,
 		},
@@ -299,6 +300,30 @@ func GetBelloBuddyRuntimeConfig(c *gin.Context) {
 	if !belloReadBody(c, &input) {
 		return
 	}
-	result, err := service.GetBelloBuddyRuntimeConfig(c.GetInt("id"), c.Param("accountKey"), input)
+	identity, ok := middleware.GetSessionAuthIdentity(c)
+	if !ok {
+		belloReply(c, nil, service.ErrBelloBuddySnapshotInvalid)
+		return
+	}
+	result, err := service.GetBelloBuddyRuntimeConfig(identity.UserID, c.Param("accountKey"), input)
+	if err == nil {
+		err = service.IssueBelloBuddyRuntimeSnapshot(identity, result)
+	}
+	belloReply(c, result, err)
+}
+
+func RenewBelloBuddyRuntimeSnapshot(c *gin.Context) {
+	var input struct {
+		SnapshotRef string `json:"snapshot_ref"`
+	}
+	if !belloReadBody(c, &input) {
+		return
+	}
+	identity, ok := middleware.GetSessionAuthIdentity(c)
+	if !ok {
+		belloReply(c, nil, service.ErrBelloBuddySnapshotInvalid)
+		return
+	}
+	result, err := service.RenewBelloBuddyRuntimeSnapshot(identity, c.Param("accountKey"), input.SnapshotRef)
 	belloReply(c, result, err)
 }

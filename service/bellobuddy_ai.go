@@ -20,17 +20,20 @@ import (
 const BelloBuddyScreenModel = "jev-latest"
 
 type BelloBuddyAIInput struct {
-	AccountKey      string            `json:"account_key"`
-	JobID           string            `json:"job_id"`
-	JobVersion      int64             `json:"job_version"`
-	SchemaVersion   int               `json:"schema_version"`
-	CandidateID     string            `json:"candidate_id"`
-	FilterPlanID    int               `json:"filter_plan_id"`
-	FilterVersion   int64             `json:"filter_version"`
-	BindingVersion  int64             `json:"binding_version"`
-	Request         common.RawMessage `json:"request,omitempty"`
-	Input           string            `json:"input"`
-	ConversationRef string            `json:"conversation_ref"`
+	SnapshotRef          string            `json:"snapshot_ref,omitempty"`
+	CommunicationPlanID  int               `json:"communication_plan_id,omitempty"`
+	CommunicationVersion int64             `json:"communication_version,omitempty"`
+	AccountKey           string            `json:"account_key"`
+	JobID                string            `json:"job_id"`
+	JobVersion           int64             `json:"job_version"`
+	SchemaVersion        int               `json:"schema_version"`
+	CandidateID          string            `json:"candidate_id"`
+	FilterPlanID         int               `json:"filter_plan_id"`
+	FilterVersion        int64             `json:"filter_version"`
+	BindingVersion       int64             `json:"binding_version"`
+	Request              common.RawMessage `json:"request,omitempty"`
+	Input                string            `json:"input"`
+	ConversationRef      string            `json:"conversation_ref"`
 }
 
 type BelloBuddyConversationScope struct {
@@ -60,13 +63,54 @@ func ResolveBelloBuddyAIRoute(identity AuthIdentity, input BelloBuddyAIInput, re
 			return nil, err
 		}
 	}
+	var snapshot *belloBuddySnapshot
+	var frozenJob *belloBuddySnapshotJob
+	if input.SnapshotRef != "" {
+		var err error
+		snapshot, err = openBelloBuddySnapshot(input.SnapshotRef, identity, input.AccountKey)
+		if err != nil {
+			return nil, err
+		}
+		for i := range snapshot.Jobs {
+			if snapshot.Jobs[i].JobID == input.JobID {
+				frozenJob = &snapshot.Jobs[i]
+				break
+			}
+		}
+		if frozenJob == nil || frozenJob.Version != input.JobVersion {
+			return nil, ErrBelloBuddySnapshotInvalid
+		}
+	}
 	route := &BelloBuddyAIRoute{Model: BelloBuddyScreenModel}
 	err := model.WithBelloBuddyAccount(identity.UserID, input.AccountKey, false, func(tx *gorm.DB, account *model.BelloBuddyAccount) error {
 		var job model.BelloBuddyJob
 		if err := tx.Where("account_id = ? AND job_hash = ?", account.ID, model.BelloBuddyIdentityHash(input.JobID)).First(&job).Error; err != nil {
 			return err
 		}
-		if job.Version != input.JobVersion {
+		if snapshot != nil {
+			if snapshot.AccountID != account.ID || frozenJob.ID != job.ID {
+				return ErrBelloBuddySnapshotInvalid
+			}
+			// 归属与存在性实时检查，普通选择及正文沿用签发时版本。
+			for _, id := range []int{frozenJob.FilterPlanID, frozenJob.CommunicationID, snapshot.Plans[frozenJob.CommunicationID].FilterPlanID} {
+				if id == 0 {
+					continue
+				}
+				plan, ok := snapshot.Plans[id]
+				if !ok {
+					return ErrBelloBuddySnapshotInvalid
+				}
+				if _, err := GetBelloBuddyPlan(tx, identity.UserID, id, plan.Kind, true); err != nil {
+					return err
+				}
+			}
+			// 机器人变更的恢复政策未确定，保持当前绑定 ID/version 的冲突边界。
+			if reply && job.BindingID != frozenJob.BindingID {
+				return &BelloBuddyError{http.StatusConflict, "BOT_BINDING_CHANGED", "机器人绑定已变更，请明确选择如何恢复任务"}
+			}
+			job.FilterMode, job.FilterPlanID = frozenJob.FilterMode, frozenJob.FilterPlanID
+			job.CommunicationMode, job.CommunicationID = frozenJob.CommunicationMode, frozenJob.CommunicationID
+		} else if job.Version != input.JobVersion {
 			return ErrBelloBuddyConflict
 		}
 		if !reply {
@@ -80,6 +124,9 @@ func ResolveBelloBuddyAIRoute(identity AuthIdentity, input BelloBuddyAIInput, re
 					return err
 				}
 				filterID = communication.FilterPlanID
+				if snapshot != nil {
+					filterID = snapshot.Plans[job.CommunicationID].FilterPlanID
+				}
 			}
 			if filterID <= 0 || filterID != input.FilterPlanID {
 				return ErrBelloBuddyConfig
@@ -87,6 +134,16 @@ func ResolveBelloBuddyAIRoute(identity AuthIdentity, input BelloBuddyAIInput, re
 			filter, err := GetBelloBuddyPlan(tx, identity.UserID, filterID, "filter", true)
 			if err != nil {
 				return err
+			}
+			if snapshot != nil {
+				frozenFilter, ok := snapshot.Plans[filterID]
+				if !ok || frozenFilter.Kind != "filter" || input.FilterVersion <= 0 || frozenFilter.Version != input.FilterVersion {
+					return ErrBelloBuddySnapshotInvalid
+				}
+				if !frozenFilter.EnableAI {
+					return belloInvalid("当前运行快照筛选方案未启用 AI 筛选")
+				}
+				return nil
 			}
 			if input.FilterVersion <= 0 || filter.Version != input.FilterVersion {
 				return ErrBelloBuddyConflict
@@ -101,6 +158,12 @@ func ResolveBelloBuddyAIRoute(identity AuthIdentity, input BelloBuddyAIInput, re
 		}
 		if job.CommunicationMode != "plan" {
 			return ErrBelloBuddyConfig
+		}
+		if snapshot != nil {
+			communication := snapshot.Plans[job.CommunicationID]
+			if input.CommunicationPlanID != job.CommunicationID || input.CommunicationVersion <= 0 || communication.Version != input.CommunicationVersion || input.BindingVersion != frozenJob.BindingVersion {
+				return ErrBelloBuddySnapshotInvalid
+			}
 		}
 		if _, err := belloBuddyConversationCipher(); err != nil {
 			return err
@@ -126,12 +189,16 @@ func ResolveBelloBuddyAIRoute(identity AuthIdentity, input BelloBuddyAIInput, re
 		if err := tx.First(&channel, binding.ChannelID).Error; err != nil {
 			return err
 		}
+		signature := model.BelloBuddyIdentityHash(channel.GetBaseURL() + "\x00" + channel.GetModelMapping() + "\x00" + binding.Model)
+		if snapshot != nil && (binding.ChannelID != frozenJob.ChannelID || binding.Model != frozenJob.Model || signature != frozenJob.ChannelSignature) {
+			return &BelloBuddyError{http.StatusConflict, "BOT_BINDING_CHANGED", "机器人渠道配置已变更，请明确选择如何恢复任务"}
+		}
 		route.Model, route.ChannelID = binding.Model, binding.ChannelID
 		route.Scope = BelloBuddyConversationScope{
 			UserID: identity.UserID, AuthVersion: identity.UserAuthVersion, AccountID: account.ID, JobID: job.ID,
 			CandidateHash: model.BelloBuddyIdentityHash(input.CandidateID), BindingID: binding.ID,
 			BindingVersion: binding.Version, ChannelID: binding.ChannelID,
-			ChannelSignature: model.BelloBuddyIdentityHash(channel.GetBaseURL() + "\x00" + channel.GetModelMapping() + "\x00" + binding.Model),
+			ChannelSignature: signature,
 		}
 		return nil
 	})

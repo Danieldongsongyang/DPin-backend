@@ -20,6 +20,7 @@ func registerBelloBuddyRoutes(apiRouter *gin.RouterGroup) {
 	routes.PUT("/accounts/:accountKey/jobs/:jobId/config", controller.SaveBelloBuddyJobConfig)
 	routes.PUT("/accounts/:accountKey/jobs/config/batch", controller.SaveBelloBuddyJobConfigBatch)
 	routes.POST("/accounts/:accountKey/runtime-config", controller.GetBelloBuddyRuntimeConfig)
+	routes.POST("/accounts/:accountKey/runtime-snapshot/renew", controller.RenewBelloBuddyRuntimeSnapshot)
 
 	ai := routes.Group("/ai")
 	ai.Use(middleware.RouteTag("relay"), middleware.BodyStorageCleanup(), controller.BelloBuddyAIResponse(), middleware.SystemPerformanceCheck())
