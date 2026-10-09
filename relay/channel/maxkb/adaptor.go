@@ -1,13 +1,20 @@
 package maxkb
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"math"
 	"net/http"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -21,6 +28,7 @@ import (
 // Conversation IDs are installed by the authenticated host bridge, never read
 // from an arbitrary model request. The host must bind them to user/account/job.
 const ContextChatID = "maxkb_chat_id"
+const ContextScopeID = "maxkb_scope_id"
 const ContextReturnedChatID = "maxkb_returned_chat_id"
 
 const maxBodyBytes = 1 << 20
@@ -39,6 +47,7 @@ type chatRequest struct {
 	Messages []chatMessage `json:"messages"`
 	Stream   *bool         `json:"stream,omitempty"`
 	ChatID   string        `json:"chat_id,omitempty"`
+	ScopeID  string        `json:"dpin_scope,omitempty"`
 }
 
 func (*Adaptor) Init(*relaycommon.RelayInfo) {}
@@ -65,6 +74,15 @@ func (*Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *re
 	header.Set("Content-Type", "application/json")
 	header.Set("Accept", "application/json")
 	header.Set("Authorization", "Bearer "+info.ApiKey)
+	if c.GetString(ContextScopeID) != "" {
+		for _, name := range []string{"X-DPIN-Scope", "X-DPIN-Timestamp", "X-DPIN-Nonce", "X-DPIN-Signature"} {
+			value := c.GetString("maxkb_signed_" + name)
+			if value == "" {
+				return errors.New("MaxKB identity signature is unavailable")
+			}
+			header.Set(name, value)
+		}
+	}
 	return nil
 }
 
@@ -93,7 +111,7 @@ func (*Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, errUnsupported
 	}
 	stream := false
-	return chatRequest{Model: info.UpstreamModelName, Messages: []chatMessage{{Role: "user", Content: content}}, Stream: &stream, ChatID: c.GetString(ContextChatID)}, nil
+	return chatRequest{Model: info.UpstreamModelName, Messages: []chatMessage{{Role: "user", Content: content}}, Stream: &stream, ChatID: c.GetString(ContextChatID), ScopeID: c.GetString(ContextScopeID)}, nil
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, body io.Reader) (any, error) {
@@ -109,11 +127,11 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, body io
 		return nil, errUnsupported
 	}
 	for key := range fields {
-		if key != "model" && key != "messages" && key != "stream" && key != "chat_id" {
+		if key != "model" && key != "messages" && key != "stream" && key != "chat_id" && key != "dpin_scope" {
 			return nil, errUnsupported
 		}
 	}
-	if info.IsStream || (request.Stream != nil && *request.Stream) || request.Model != info.UpstreamModelName || len(request.Messages) != 1 || request.Messages[0].Role != "user" || strings.TrimSpace(request.Messages[0].Content) == "" || request.ChatID != c.GetString(ContextChatID) {
+	if info.IsStream || (request.Stream != nil && *request.Stream) || request.Model != info.UpstreamModelName || len(request.Messages) != 1 || request.Messages[0].Role != "user" || strings.TrimSpace(request.Messages[0].Content) == "" || request.ChatID != c.GetString(ContextChatID) || request.ScopeID != c.GetString(ContextScopeID) {
 		return nil, errUnsupported
 	}
 	var messages []map[string]json.RawMessage
@@ -126,6 +144,27 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, body io
 			return nil, errors.New("invalid MaxKB conversation reference")
 		}
 	}
+	if request.ScopeID != "" {
+		secret := os.Getenv("DPIN_MAXKB_IDENTITY_SECRET")
+		if len(secret) < 32 {
+			return nil, errors.New("MaxKB identity is not configured")
+		}
+		nonce := make([]byte, 16)
+		if _, err := rand.Read(nonce); err != nil {
+			return nil, err
+		}
+		stamp := strconv.FormatInt(time.Now().Unix(), 10)
+		nonceHex := hex.EncodeToString(nonce)
+		digest := sha256.Sum256(data)
+		appID, _ := uuid.Parse(info.UpstreamModelName)
+		signed := strings.Join([]string{"dpin-maxkb-scope-v1", appID.String(), request.ScopeID, stamp, nonceHex, hex.EncodeToString(digest[:])}, "\n")
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(signed))
+		c.Set("maxkb_signed_X-DPIN-Scope", request.ScopeID)
+		c.Set("maxkb_signed_X-DPIN-Timestamp", stamp)
+		c.Set("maxkb_signed_X-DPIN-Nonce", nonceHex)
+		c.Set("maxkb_signed_X-DPIN-Signature", hex.EncodeToString(mac.Sum(nil)))
+	}
 	return channel.DoApiRequest(a, c, info, strings.NewReader(string(data)))
 }
 
@@ -137,6 +176,7 @@ func (*Adaptor) DoResponse(c *gin.Context, response *http.Response, info *relayc
 	}
 	var result struct {
 		ID      string `json:"id"`
+		ScopeID string `json:"dpin_scope"`
 		Choices []struct {
 			ChatID       string      `json:"chat_id"`
 			Index        int         `json:"index"`
@@ -144,14 +184,21 @@ func (*Adaptor) DoResponse(c *gin.Context, response *http.Response, info *relayc
 			FinishReason string      `json:"finish_reason"`
 		} `json:"choices"`
 		Usage *struct {
-			Prompt     *int   `json:"prompt_tokens"`
-			Completion *int   `json:"completion_tokens"`
-			Total      *int   `json:"total_tokens"`
-			Source     string `json:"usage_source"`
+			Prompt        *int   `json:"prompt_tokens"`
+			Completion    *int   `json:"completion_tokens"`
+			Total         *int   `json:"total_tokens"`
+			Source        string `json:"usage_source"`
+			CacheSource   string `json:"cache_usage_source"`
+			PromptDetails *struct {
+				Cached *int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 	if common.Unmarshal(body, &result) != nil || result.ID == "" || len(result.ID) > 128 || len(result.Choices) != 1 || result.Choices[0].Index != 0 || result.Choices[0].Message.Role != "assistant" || strings.TrimSpace(result.Choices[0].Message.Content) == "" || result.Choices[0].FinishReason != "stop" {
 		return nil, types.NewError(errors.New("MaxKB response is missing a completed text answer"), types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+	}
+	if expected := c.GetString(ContextScopeID); expected != "" && result.ScopeID != expected {
+		return nil, types.NewError(errors.New("MaxKB response scope does not match"), types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
 	}
 	chatID, err := uuid.Parse(result.Choices[0].ChatID)
 	if err != nil || chatID == uuid.Nil || (c.GetString(ContextChatID) != "" && c.GetString(ContextChatID) != result.Choices[0].ChatID) {
@@ -164,7 +211,12 @@ func (*Adaptor) DoResponse(c *gin.Context, response *http.Response, info *relayc
 	if u == nil || u.Source != "upstream" || u.Prompt == nil || u.Completion == nil || u.Total == nil || *u.Prompt < 0 || *u.Completion < 0 || *u.Prompt > math.MaxInt32 || *u.Completion > math.MaxInt32 || *u.Prompt > math.MaxInt32-*u.Completion || *u.Total != *u.Prompt+*u.Completion {
 		return nil, types.NewError(errors.New("MaxKB response is missing valid actual token usage"), types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
 	}
+	// A missing cache fact cannot be billed as a cache miss under cache pricing.
+	if u.CacheSource != "upstream" || u.PromptDetails == nil || u.PromptDetails.Cached == nil || *u.PromptDetails.Cached < 0 || *u.PromptDetails.Cached > *u.Prompt {
+		return nil, types.NewError(errors.New("MaxKB response is missing valid actual cache usage"), types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+	}
 	usage := &dto.Usage{PromptTokens: *u.Prompt, CompletionTokens: *u.Completion, TotalTokens: *u.Total, UsageSource: "upstream"}
+	usage.PromptTokensDetails.CachedTokens = *u.PromptDetails.Cached
 	out := dto.TextResponse{Id: result.ID, Object: "chat.completion", Created: common.GetTimestamp(), Model: info.OriginModelName, Usage: *usage, Choices: []dto.OpenAITextResponseChoice{{Index: 0, Message: dto.Message{Role: "assistant", Content: result.Choices[0].Message.Content}, FinishReason: "stop"}}}
 	encoded, err := common.Marshal(out)
 	if err != nil {

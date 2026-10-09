@@ -39,6 +39,7 @@ import (
 
 // TEST_*_DSN 必须指向可销毁的独立测试库；测试结束删除本测试创建的表。
 func TestBelloBuddyConfiguration(t *testing.T) {
+	t.Setenv("DPIN_MAXKB_IDENTITY_SECRET", "p7b-test-shared-identity-secret-0123456789")
 	for _, dialect := range []common.DatabaseType{common.DatabaseTypeSQLite, common.DatabaseTypeMySQL, common.DatabaseTypePostgreSQL} {
 		t.Run(string(dialect), func(t *testing.T) {
 			var dialector gorm.Dialector
@@ -576,6 +577,64 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			assert.Equal(t, beforeMapping, afterMapping, "任一职位版本冲突时跨用户映射全部回滚")
 			request(http.MethodPut, mappingPath, tokens[2], mapping, http.StatusOK)
 			request(http.MethodPut, mappingPath, tokens[2], mapping, http.StatusConflict)
+			t.Run("管理员解绑与恢复", func(t *testing.T) {
+				var originalJobs []model.BelloBuddyJob
+				require.NoError(t, db.Where("binding_id = ?", binding.ID).Order("id").Find(&originalJobs).Error)
+				require.Len(t, originalJobs, 2)
+				var originalAccounts []model.BelloBuddyAccount
+				require.NoError(t, db.Order("id").Find(&originalAccounts).Error)
+				detach := service.BelloBuddyBindingJobsInput{Detach: true, ExpectedVersion: binding.Version}
+				for _, job := range originalJobs {
+					detach.Jobs = append(detach.Jobs, service.BelloBuddyJobMappingInput{JobConfigID: job.ID, ExpectedVersion: job.Version})
+				}
+				request(http.MethodPut, mappingPath, tokens[0], detach, http.StatusForbidden)
+				request(http.MethodPut, mappingPath, patRaw, detach, http.StatusForbidden)
+				stale := detach
+				stale.Jobs = append([]service.BelloBuddyJobMappingInput(nil), detach.Jobs...)
+				stale.Jobs[1].ExpectedVersion++
+				request(http.MethodPut, mappingPath, tokens[2], stale, http.StatusConflict)
+				var unbound model.BelloBuddyJob
+				require.NoError(t, db.Where("job_id = ? AND binding_id = 0", "unconfirmed").First(&unbound).Error)
+				mismatch := detach
+				mismatch.Jobs = append([]service.BelloBuddyJobMappingInput(nil), detach.Jobs[:1]...)
+				mismatch.Jobs = append(mismatch.Jobs, service.BelloBuddyJobMappingInput{JobConfigID: unbound.ID, ExpectedVersion: unbound.Version})
+				request(http.MethodPut, mappingPath, tokens[2], mismatch, http.StatusConflict)
+				var unchangedJobs []model.BelloBuddyJob
+				require.NoError(t, db.Where("binding_id = ?", binding.ID).Order("id").Find(&unchangedJobs).Error)
+				assert.Equal(t, originalJobs, unchangedJobs, "部分职位冲突时解绑整体回滚")
+				var unchangedAccounts []model.BelloBuddyAccount
+				require.NoError(t, db.Order("id").Find(&unchangedAccounts).Error)
+				assert.Equal(t, originalAccounts, unchangedAccounts, "失败解绑不推进账号版本")
+				request(http.MethodPut, mappingPath, tokens[2], detach, http.StatusOK)
+				request(http.MethodPut, mappingPath, tokens[2], detach, http.StatusConflict)
+				restore := service.BelloBuddyBindingJobsInput{ExpectedVersion: binding.Version}
+				for _, before := range originalJobs {
+					var after model.BelloBuddyJob
+					require.NoError(t, db.First(&after, before.ID).Error)
+					assert.Zero(t, after.BindingID)
+					assert.Equal(t, before.Version+1, after.Version)
+					after.BindingID, after.Version, after.UpdatedAt = before.BindingID, before.Version, before.UpdatedAt
+					assert.Equal(t, before, after, "解绑保留全部职位业务配置")
+					restore.Jobs = append(restore.Jobs, service.BelloBuddyJobMappingInput{JobConfigID: before.ID, ExpectedVersion: before.Version + 1})
+				}
+				var updatedAccounts []model.BelloBuddyAccount
+				require.NoError(t, db.Order("id").Find(&updatedAccounts).Error)
+				for i, before := range originalAccounts {
+					mapped := false
+					for _, job := range originalJobs {
+						mapped = mapped || job.AccountID == before.ID
+					}
+					if mapped {
+						assert.Equal(t, before.Version+1, updatedAccounts[i].Version)
+					} else {
+						assert.Equal(t, before, updatedAccounts[i])
+					}
+				}
+				var untouched model.BelloBuddyJob
+				require.NoError(t, db.First(&untouched, unbound.ID).Error)
+				assert.Equal(t, unbound, untouched, "未确认职位保持不变")
+				request(http.MethodPut, mappingPath, tokens[2], restore, http.StatusOK)
+			})
 			mappedRuntime := service.BelloBuddyRuntimeInput{JobIDs: []string{"target", "unconfirmed"}, RunnerVersion: "test-1", SchemaVersion: 1}
 			for _, token := range tokens[:2] {
 				body := request(http.MethodPost, "/accounts/mapped-account/runtime-config", token, mappedRuntime, http.StatusOK)
@@ -814,14 +873,14 @@ func runBelloBuddyAIBridge(t *testing.T, db *gorm.DB, engine *gin.Engine, users 
 			return
 		}
 		assert.Equal(t, "/chat/api/"+appID+"/chat/completions", r.URL.Path)
-		usage := `,"usage":{"prompt_tokens":20,"completion_tokens":5,"total_tokens":25,"usage_source":"upstream"}`
+		usage := `,"usage":{"prompt_tokens":20,"completion_tokens":5,"total_tokens":25,"usage_source":"upstream","cache_usage_source":"upstream","prompt_tokens_details":{"cached_tokens":0}}`
 		if behavior.Load() == 1 {
 			usage = ""
 		}
 		if behavior.Load() == 3 {
-			usage = `,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"usage_source":"upstream"}`
+			usage = `,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"usage_source":"upstream","cache_usage_source":"upstream","prompt_tokens_details":{"cached_tokens":0}}`
 		}
-		_, _ = io.WriteString(w, `{"id":"test-response","choices":[{"index":0,"chat_id":"`+chatID+`","message":{"role":"assistant","content":"测试建议文本"},"finish_reason":"stop"}]`+usage+`}`)
+		_, _ = io.WriteString(w, `{"dpin_scope":"`+r.Header.Get("X-DPIN-Scope")+`","id":"test-response","choices":[{"index":0,"chat_id":"`+chatID+`","message":{"role":"assistant","content":"测试建议文本"},"finish_reason":"stop"}]`+usage+`}`)
 	}))
 	t.Cleanup(upstream.Close)
 	base, mapping := upstream.URL, `{"bello-test-bot":"`+appID+`"}`
@@ -1001,6 +1060,9 @@ func runBelloBuddyAIBridge(t *testing.T, db *gorm.DB, engine *gin.Engine, users 
 		_, err := service.OpenBelloBuddyConversation(response.Data.Reference, scope)
 		require.Error(t, err, dimension)
 	}
+	legacy := input
+	legacy.ConversationRef = mutateBelloBuddyReference(t, response.Data.Reference, "version", 1)
+	invoke("reply", sessions[0], legacy, 409, nil)
 	expired := input
 	expired.ConversationRef = expireBelloBuddyReference(t, response.Data.Reference)
 	invoke("reply", sessions[0], expired, 409, nil)
@@ -1142,6 +1204,10 @@ func (belloBuddyTokenBeforeBridge) TableName() string { return "tokens" }
 
 // 签发一个拥有真实服务器认证标签但已过期的夹具，验证到期检查没有被跳过。
 func expireBelloBuddyReference(t *testing.T, reference string) string {
+	return mutateBelloBuddyReference(t, reference, "expires_at", common.GetTimestamp()-1)
+}
+
+func mutateBelloBuddyReference(t *testing.T, reference string, field string, value any) string {
 	t.Helper()
 	key := sha256.Sum256([]byte("dpin-bellobuddy-conversation-v1\x00" + common.SessionSecret))
 	block, err := aes.NewCipher(key[:])
@@ -1155,7 +1221,7 @@ func expireBelloBuddyReference(t *testing.T, reference string) string {
 	require.NoError(t, err)
 	var fields map[string]common.RawMessage
 	require.NoError(t, common.Unmarshal(body, &fields))
-	fields["expires_at"], err = common.Marshal(common.GetTimestamp() - 1)
+	fields[field], err = common.Marshal(value)
 	require.NoError(t, err)
 	body, err = common.Marshal(fields)
 	require.NoError(t, err)

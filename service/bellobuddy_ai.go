@@ -3,11 +3,13 @@ package service
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 
@@ -223,6 +225,32 @@ func CheckBelloBuddyChannelAccess(group, modelName string, channelID int) error 
 	return nil
 }
 
+// 同一候选人的记忆作用域独立于登录会话；机器人目标变化形成新作用域。
+func BelloBuddyMaxKBScope(scope BelloBuddyConversationScope) (string, error) {
+	secret := os.Getenv("DPIN_MAXKB_IDENTITY_SECRET")
+	if len(secret) < 32 {
+		return "", &BelloBuddyError{http.StatusServiceUnavailable, "AI_IDENTITY_NOT_CONFIGURED", "MaxKB 服务身份尚未配置"}
+	}
+	if scope.UserID <= 0 || scope.AccountID <= 0 || scope.JobID <= 0 || scope.BindingID <= 0 || scope.CandidateHash == "" || scope.ChannelSignature == "" {
+		return "", ErrBelloBuddyConfig
+	}
+	data, err := common.Marshal([]any{scope.UserID, scope.AccountID, scope.JobID, scope.CandidateHash, scope.BindingID, scope.ChannelID, scope.ChannelSignature})
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("dpin-maxkb-identity-v1\n"))
+	mac.Write(data)
+	sum := mac.Sum(nil)
+	id, err := uuid.FromBytes(sum[:16])
+	if err != nil {
+		return "", err
+	}
+	id[6] = (id[6] & 0x0f) | 0x50
+	id[8] = (id[8] & 0x3f) | 0x80
+	return id.String(), nil
+}
+
 func BuildBelloBuddyScreenRequest(raw common.RawMessage) ([]byte, error) {
 	var fields map[string]common.RawMessage
 	if common.Unmarshal(raw, &fields) != nil || fields == nil {
@@ -271,7 +299,7 @@ func SealBelloBuddyConversation(scope BelloBuddyConversationScope, chatID string
 	if err != nil || id == uuid.Nil || scope.UserID <= 0 || scope.AuthVersion <= 0 {
 		return "", errors.New("invalid conversation scope")
 	}
-	data, err := common.Marshal(belloBuddyConversationReference{Version: 1, Scope: scope, ChatID: chatID, ExpiresAt: common.GetTimestamp() + 30*24*60*60})
+	data, err := common.Marshal(belloBuddyConversationReference{Version: 2, Scope: scope, ChatID: chatID, ExpiresAt: common.GetTimestamp() + 30*24*60*60})
 	if err != nil {
 		return "", err
 	}
@@ -305,7 +333,7 @@ func OpenBelloBuddyConversation(reference string, scope BelloBuddyConversationSc
 		return "", invalid
 	}
 	var value belloBuddyConversationReference
-	if common.Unmarshal(data, &value) != nil || value.Version != 1 || value.Scope != scope || value.ExpiresAt <= common.GetTimestamp() {
+	if common.Unmarshal(data, &value) != nil || value.Version != 2 || value.Scope != scope || value.ExpiresAt <= common.GetTimestamp() {
 		return "", invalid
 	}
 	id, err := uuid.Parse(value.ChatID)

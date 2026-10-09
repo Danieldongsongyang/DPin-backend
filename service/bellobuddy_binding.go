@@ -28,6 +28,7 @@ type BelloBuddyJobMappingInput struct {
 }
 
 type BelloBuddyBindingJobsInput struct {
+	Detach          bool                        `json:"detach"`
 	ExpectedVersion int64                       `json:"expected_version"`
 	Jobs            []BelloBuddyJobMappingInput `json:"jobs"`
 }
@@ -135,7 +136,7 @@ func MapBelloBuddyJobsToBinding(bindingID int, input BelloBuddyBindingJobsInput)
 		// 每个账号的版本一起推进；CAS 与普通用户的批量选择采用相同版本约束。
 		accounts := make(map[int]bool)
 		for _, job := range jobs {
-			if job.Version != expected[job.ID] {
+			if job.Version != expected[job.ID] || (input.Detach && job.BindingID != bindingID) {
 				return ErrBelloBuddyConflict
 			}
 			if !accounts[job.AccountID] {
@@ -148,7 +149,11 @@ func MapBelloBuddyJobsToBinding(bindingID int, input BelloBuddyBindingJobsInput)
 				}
 				accounts[job.AccountID] = true
 			}
-			result := tx.Model(&model.BelloBuddyJob{}).Where("id = ? AND version = ?", job.ID, job.Version).Updates(map[string]any{"binding_id": bindingID, "version": job.Version + 1, "updated_at": common.GetTimestamp()})
+			targetBindingID := bindingID
+			if input.Detach {
+				targetBindingID = 0
+			}
+			result := tx.Model(&model.BelloBuddyJob{}).Where("id = ? AND version = ?", job.ID, job.Version).Updates(map[string]any{"binding_id": targetBindingID, "version": job.Version + 1, "updated_at": common.GetTimestamp()})
 			if result.Error != nil {
 				return result.Error
 			}

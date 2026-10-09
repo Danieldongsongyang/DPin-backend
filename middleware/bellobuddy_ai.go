@@ -69,6 +69,12 @@ func PrepareBelloBuddyAI(reply bool) gin.HandlerFunc {
 				abortBelloBuddyAI(c, &service.BelloBuddyError{Status: http.StatusBadRequest, Code: "INVALID_REQUEST", Message: "回复请求必须包含一轮文本输入"})
 				return
 			}
+			scopeID, err := service.BelloBuddyMaxKBScope(route.Scope)
+			if err != nil {
+				abortBelloBuddyAI(c, err)
+				return
+			}
+			c.Set(maxkb.ContextScopeID, scopeID)
 			if input.ConversationRef != "" {
 				chatID, err := service.OpenBelloBuddyConversation(input.ConversationRef, route.Scope)
 				if err != nil {
