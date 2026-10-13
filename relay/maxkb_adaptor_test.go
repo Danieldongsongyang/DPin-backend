@@ -245,3 +245,22 @@ func TestMaxKBTrustedScope(t *testing.T) {
 	_, err = a.DoRequest(c, info, strings.NewReader(string(body)))
 	require.Error(t, err)
 }
+
+func TestMaxKBC2ProtocolConfirmation(t *testing.T) {
+	for _, protocol := range []string{"", "other", "bellobuddy-c2-v1"} {
+		t.Run(protocol, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Set(maxkb.ContextReplyProtocol, "bellobuddy-c2-v1")
+			body := fmt.Sprintf(`{"id":"c2-record","reply_protocol":%q,"choices":[{"chat_id":"11a0dbc2-4722-7681-9fbc-4ddf277cbbd6","index":0,"message":{"role":"assistant","content":"回复"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"usage_source":"upstream","cache_usage_source":"upstream","prompt_tokens_details":{"cached_tokens":0}}}`, protocol)
+			info := &relaycommon.RelayInfo{OriginModelName: "reply", ChannelMeta: &relaycommon.ChannelMeta{}}
+			response := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}
+			_, failure := (&maxkb.Adaptor{}).DoResponse(c, response, info)
+			if protocol == "bellobuddy-c2-v1" {
+				require.Nil(t, failure)
+			} else {
+				require.NotNil(t, failure)
+				assert.Empty(t, c.GetString(maxkb.ContextReturnedChatID))
+			}
+		})
+	}
+}

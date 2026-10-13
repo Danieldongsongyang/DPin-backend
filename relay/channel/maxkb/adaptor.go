@@ -30,6 +30,7 @@ import (
 const ContextChatID = "maxkb_chat_id"
 const ContextScopeID = "maxkb_scope_id"
 const ContextReturnedChatID = "maxkb_returned_chat_id"
+const ContextReplyProtocol = "maxkb_reply_protocol"
 
 const maxBodyBytes = 1 << 20
 
@@ -175,9 +176,10 @@ func (*Adaptor) DoResponse(c *gin.Context, response *http.Response, info *relayc
 		return nil, types.NewError(errors.New("invalid or oversized MaxKB response"), types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
 	}
 	var result struct {
-		ID      string `json:"id"`
-		ScopeID string `json:"dpin_scope"`
-		Choices []struct {
+		ID            string `json:"id"`
+		ScopeID       string `json:"dpin_scope"`
+		ReplyProtocol string `json:"reply_protocol"`
+		Choices       []struct {
 			ChatID       string      `json:"chat_id"`
 			Index        int         `json:"index"`
 			Message      chatMessage `json:"message"`
@@ -199,6 +201,9 @@ func (*Adaptor) DoResponse(c *gin.Context, response *http.Response, info *relayc
 	}
 	if expected := c.GetString(ContextScopeID); expected != "" && result.ScopeID != expected {
 		return nil, types.NewError(errors.New("MaxKB response scope does not match"), types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+	}
+	if expected := c.GetString(ContextReplyProtocol); expected != "" && result.ReplyProtocol != expected {
+		return nil, types.NewError(errors.New("MaxKB reply context protocol is not confirmed"), types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
 	}
 	chatID, err := uuid.Parse(result.Choices[0].ChatID)
 	if err != nil || chatID == uuid.Nil || (c.GetString(ContextChatID) != "" && c.GetString(ContextChatID) != result.Choices[0].ChatID) {

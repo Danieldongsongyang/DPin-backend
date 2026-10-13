@@ -320,6 +320,32 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			var synced service.BelloBuddyJobsConfig
 			require.NoError(t, common.Unmarshal(request(http.MethodPost, "/accounts/Account/jobs/sync", tokens[0], syncInput, http.StatusOK), &synced))
 			require.Len(t, synced.Jobs, 2)
+			t.Run("相同职位同步保留版本及配置", func(t *testing.T) {
+				input := service.BelloBuddySyncInput{DisplayName: "同步回归账号", Jobs: []service.BelloBuddyJobInput{{JobID: "same", Name: "售后岗位", City: "郑州", Online: &enabled}}}
+				var initial, repeated service.BelloBuddyJobsConfig
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/accounts/sync-regression/jobs/sync", tokens[0], input, http.StatusOK), &initial))
+				configured := service.BelloBuddyJobConfigInput{JobID: "same", ExpectedVersion: 1, FilterMode: "pass_all", CommunicationMode: "jump", GreetingLimit: &limit}
+				request(http.MethodPut, "/accounts/sync-regression/jobs/same/config", tokens[0], configured, http.StatusOK)
+				require.NoError(t, common.Unmarshal(request(http.MethodGet, "/accounts/sync-regression/jobs/config", tokens[0], nil, http.StatusOK), &initial))
+				input.DisplayName = "更新账号展示名"
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/accounts/sync-regression/jobs/sync", tokens[0], input, http.StatusOK), &repeated))
+				assert.Equal(t, initial.Jobs, repeated.Jobs, "相同职位不推进版本、不抹掉人工配置")
+				assert.Equal(t, input.DisplayName, repeated.Account.DisplayName)
+				input.Jobs[0].City = "上海"
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/accounts/sync-regression/jobs/sync", tokens[0], input, http.StatusOK), &repeated))
+				assert.Equal(t, initial.Jobs[0].Version+1, repeated.Jobs[0].Version, "真实资料变化继续推进版本")
+				assert.Equal(t, "上海", repeated.Jobs[0].City)
+				offline := false
+				input.Jobs[0].Online = &offline
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/accounts/sync-regression/jobs/sync", tokens[0], input, http.StatusOK), &repeated))
+				assert.Equal(t, "skip_all", repeated.Jobs[0].FilterMode)
+				assert.Zero(t, repeated.Jobs[0].FilterPlanID)
+				assert.Zero(t, repeated.Jobs[0].GreetingLimit)
+				initial = repeated
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/accounts/sync-regression/jobs/sync", tokens[0], input, http.StatusOK), &repeated))
+				assert.Equal(t, initial.Jobs, repeated.Jobs, "重复下线保留已完成的清理及版本")
+			})
+
 			assert.EqualValues(t, 2, synced.Account.Version)
 			request(http.MethodGet, "/accounts/Account/jobs/config", tokens[1], nil, http.StatusNotFound)
 			runtime := service.BelloBuddyRuntimeInput{JobIDs: []string{"Job"}, RunnerVersion: "test-1", SchemaVersion: 1}

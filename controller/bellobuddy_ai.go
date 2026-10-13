@@ -139,10 +139,14 @@ func BelloBuddyAIResponse() gin.HandlerFunc {
 			belloReply(c, nil, err)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{
+		data := gin.H{
 			"text": response.Choices[0].Message.Content, "model": route.Model, "usage": response.Usage,
 			"conversation_ref": reference, "binding_version": route.Scope.BindingVersion,
-		}, "request_id": requestID})
+		}
+		if protocol := c.GetString(maxkb.ContextReplyProtocol); protocol != "" {
+			data["reply_protocol"] = protocol
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": data, "request_id": requestID})
 	}
 }
 

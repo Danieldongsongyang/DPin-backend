@@ -411,6 +411,11 @@ func SyncBelloBuddyJobs(userID int, accountKey string, input BelloBuddySyncInput
 			if err != nil {
 				return err
 			}
+			// 重启／刷新会重复同步。相同资料和有效配置不能令既有 AI 结果失效。
+			if job.Name == inputJob.Name && job.City == inputJob.City && job.Online == *inputJob.Online &&
+				(*inputJob.Online || (job.FilterMode == "skip_all" && job.FilterPlanID == 0 && job.GreetingLimit == 0)) {
+				continue
+			}
 			updates := map[string]any{"name": inputJob.Name, "city": inputJob.City, "online": *inputJob.Online, "version": job.Version + 1, "updated_at": now}
 			if !*inputJob.Online {
 				updates["filter_mode"], updates["filter_plan_id"], updates["greeting_limit"] = "skip_all", 0, 0

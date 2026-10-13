@@ -75,6 +75,12 @@ func PrepareBelloBuddyAI(reply bool) gin.HandlerFunc {
 				return
 			}
 			c.Set(maxkb.ContextScopeID, scopeID)
+			var envelope struct {
+				Protocol string `json:"protocol"`
+			}
+			if common.Unmarshal([]byte(input.Input), &envelope) == nil && envelope.Protocol == "bellobuddy-c2-v1" {
+				c.Set(maxkb.ContextReplyProtocol, envelope.Protocol)
+			}
 			if input.ConversationRef != "" {
 				chatID, err := service.OpenBelloBuddyConversation(input.ConversationRef, route.Scope)
 				if err != nil {
