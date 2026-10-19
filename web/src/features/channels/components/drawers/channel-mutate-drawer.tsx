@@ -1124,7 +1124,7 @@ export function ChannelMutateDrawer({
     const timer = setTimeout(() => {
       toast.warning(
         t(
-          'Warning: Base URL should not end with /v1. New API will handle it automatically. This may cause request failures.'
+          'Warning: Base URL should not end with /v1. D Pin will handle it automatically. This may cause request failures.'
         ),
         { duration: 5000 }
       )
@@ -3115,7 +3115,7 @@ export function ChannelMutateDrawer({
                       </FormControl>
                       <FormDescription>
                         {t(
-                          'This channel serves the models of every selected plugin. The upstream New API gateway must have the same plugins installed.'
+                          'This channel serves the models of every selected plugin. The upstream D Pin gateway must have the same plugins installed.'
                         )}
                       </FormDescription>
                       <FormMessage />
@@ -4107,7 +4107,7 @@ export function ChannelMutateDrawer({
                     {currentType !== CHANNEL_TYPE_TASK_PLUGIN && (
                       <FormDescription>
                         {t(
-                          'Custom API base URL. For official channels, New API has built-in addresses. Only fill this for third-party proxy sites or special endpoints. Do not add /v1 or trailing slash.'
+                          'Custom API base URL. For official channels, D Pin has built-in addresses. Only fill this for third-party proxy sites or special endpoints. Do not add /v1 or trailing slash.'
                         )}
                       </FormDescription>
                     )}

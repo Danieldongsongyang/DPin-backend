@@ -169,7 +169,7 @@ func TestBuiltInPluginsAddressNewAPIUpstreamOnNativeRoutes(t *testing.T) {
 	for _, key := range []string{"hailuo", "google", "vidu", "vertex-ai"} {
 		plugin, found := generation.Get(key)
 		require.True(t, found, key)
-		assert.False(t, plugin.Meta.SupportsUpstream(jsplugin.UpstreamKindNewAPI), "%s has no native routes and must not be bindable to a New API channel", key)
+		assert.False(t, plugin.Meta.SupportsUpstream(jsplugin.UpstreamKindNewAPI), "%s has no native routes and must not be bindable to a D Pin channel", key)
 	}
 
 	const base = "https://upstream.example"
@@ -264,7 +264,7 @@ func TestBuiltInPluginsAddressNewAPIUpstreamOnNativeRoutes(t *testing.T) {
 		t.Run(tc.key, func(t *testing.T) {
 			plugin, found := generation.Get(tc.key)
 			require.True(t, found)
-			require.True(t, plugin.Meta.SupportsUpstream(jsplugin.UpstreamKindNewAPI), "%s must declare new_api to be bindable to a New API channel", tc.key)
+			require.True(t, plugin.Meta.SupportsUpstream(jsplugin.UpstreamKindNewAPI), "%s must declare new_api to be bindable to a D Pin channel", tc.key)
 			call := func(hook string, args ...any) map[string]any {
 				value, err := plugin.Engine.Call(t.Context(), hook, args...)
 				require.NoError(t, err, hook)

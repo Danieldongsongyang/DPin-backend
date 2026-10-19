@@ -296,7 +296,7 @@ func TestChannelMatchesExpectedTaskPluginUsesNewAPIExtensions(t *testing.T) {
 	channel.SetSetting(dto.ChannelSettings{TaskPluginKey: "single", TaskExtendPluginKeys: []string{"ext-alpha", "ext-beta"}})
 
 	assert.True(t, channelMatchesExpectedTaskPlugin(nil, channel, "ext-alpha"))
-	assert.True(t, channelMatchesExpectedTaskPlugin(nil, channel, "single"), "the single key stays valid on a New API channel")
+	assert.True(t, channelMatchesExpectedTaskPlugin(nil, channel, "single"), "the single key stays valid on a D Pin channel")
 	assert.False(t, channelMatchesExpectedTaskPlugin(nil, channel, "ext-gamma"))
 	assert.True(t, channelMatchesExpectedTaskPlugin(nil, channel, ""), "requests without a pinned plugin still use the gateway")
 	assert.False(t, channelMatchesExpectedTaskPlugin(nil, &model.Channel{Type: constant.ChannelTypeNewAPI}, "ext-alpha"))

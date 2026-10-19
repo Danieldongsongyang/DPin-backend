@@ -112,7 +112,7 @@ func channelMatchesFilter(ch *Channel, modelName string, filter dto.ChannelFilte
 			return ch.Type != constant.ChannelTypeTaskPlugin
 		}
 		if ch.Type == constant.ChannelTypeTaskPlugin || ch.Type == constant.ChannelTypeNewAPI {
-			// A New API channel serves every plugin it is extended with; the
+			// A D Pin channel serves every plugin it is extended with; the
 			// pinned plugin or any shared-model candidate may execute there.
 			setting := ch.GetSetting()
 			return setting.BindsTaskPlugin(filter.TaskPluginKey) || slices.ContainsFunc(filter.TaskPluginKeys, setting.BindsTaskPlugin)

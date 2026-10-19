@@ -159,7 +159,7 @@ func TestSelectResponsesWSChannelAcceptsNativeResponsesChannelTypes(t *testing.T
 		advanced    *dto.AdvancedCustomConfig
 		rejectedBy  appdto.ChannelFilterKind
 	}{
-		{name: "new api", channelType: constant.ChannelTypeNewAPI},
+		{name: "D Pin", channelType: constant.ChannelTypeNewAPI},
 		{name: "sub2api", channelType: constant.ChannelTypeSub2API},
 		{name: "advanced custom native responses route", channelType: constant.ChannelTypeAdvancedCustom, advanced: nativeRoute},
 		{name: "advanced custom explicit none converter", channelType: constant.ChannelTypeAdvancedCustom, advanced: noneRoute},

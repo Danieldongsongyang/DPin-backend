@@ -44,7 +44,7 @@ import { getChannelTypeIcon, getKeyPromptForType } from '../channel-utils'
 function newAPIForm(baseUrl: string) {
   return {
     ...CHANNEL_FORM_DEFAULT_VALUES,
-    name: 'New API upstream',
+    name: 'D Pin upstream',
     type: CHANNEL_TYPE_NEW_API,
     base_url: baseUrl,
     key: 'test-key',
@@ -52,7 +52,7 @@ function newAPIForm(baseUrl: string) {
   }
 }
 
-describe('New API channel', () => {
+describe('D Pin channel', () => {
   test('registers selection, ordering, model discovery, and icon metadata', () => {
     const option = CHANNEL_TYPE_OPTIONS.find(
       (item) => item.value === CHANNEL_TYPE_NEW_API
@@ -60,7 +60,7 @@ describe('New API channel', () => {
 
     expect(option).toEqual({
       value: CHANNEL_TYPE_NEW_API,
-      label: 'New API',
+      label: 'D Pin',
     })
     expect(
       CHANNEL_TYPE_OPTIONS.findIndex(
@@ -154,7 +154,7 @@ describe.each([
   })
 })
 
-describe('New API channel task plugin extensions', () => {
+describe('D Pin channel task plugin extensions', () => {
   const plugins: TaskPluginOption[] = [
     {
       key: 'doubao',
@@ -177,7 +177,7 @@ describe('New API channel task plugin extensions', () => {
     },
   ]
 
-  test('only plugins declaring a New API upstream can be bound to a New API channel', () => {
+  test('only plugins declaring a D Pin upstream can be bound to a D Pin channel', () => {
     expect(plugins.filter(supportsNewAPIUpstream).map((p) => p.key)).toEqual([
       'doubao',
       'kling',
@@ -186,7 +186,7 @@ describe('New API channel task plugin extensions', () => {
     expect(supportsNewAPIUpstream({})).toBe(false)
   })
 
-  test('reads the extension list together with a single key on New API channels only', () => {
+  test('reads the extension list together with a single key on D Pin channels only', () => {
     expect(
       readTaskExtendPluginKeys(CHANNEL_TYPE_NEW_API, {
         task_plugin_key: 'kling',
@@ -211,7 +211,7 @@ describe('New API channel task plugin extensions', () => {
     ])
   })
 
-  test('round-trips bound plugins through the channel setting for New API channels only', () => {
+  test('round-trips bound plugins through the channel setting for D Pin channels only', () => {
     const channel = channelSchema.parse({
       id: 7,
       name: 'Gateway',

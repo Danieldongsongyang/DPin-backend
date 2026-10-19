@@ -39,7 +39,7 @@ func GetTaskPluginUsage(key string) ([]TaskPluginChannelRef, int64, error) {
 }
 
 // UnbindTaskPlugin removes one plugin from a channel's bindings and reports
-// whether the channel changed. A New API gateway channel keeps serving its other
+// whether the channel changed. A D Pin gateway channel keeps serving its other
 // plugins and its ordinary traffic.
 func UnbindTaskPlugin(channelID int, key string) (bool, error) {
 	channel, err := GetChannelById(channelID, false)

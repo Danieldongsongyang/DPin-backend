@@ -69,7 +69,7 @@ export async function getTokenAutoGroups(): Promise<
   return res.data
 }
 
-// Create a new API key
+// Create a D Pin key
 export async function createApiKey(
   data: ApiKeyFormData
 ): Promise<ApiResponse<ApiKey>> {

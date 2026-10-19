@@ -99,7 +99,7 @@ function isRelay(apiKey) {
   return apiKey.startsWith("sk-");
 }
 
-// The host signal is authoritative on New API channels; the sk- key prefix
+// The host signal is authoritative on D Pin channels; the sk- key prefix
 // stays as the heuristic for legacy type-50 channels pointed at a gateway.
 function viaGateway(ctx) {
   return !!(ctx.upstream && ctx.upstream.kind === "new_api") || isRelay(ctx.apiKey);

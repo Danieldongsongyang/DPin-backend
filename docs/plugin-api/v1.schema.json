@@ -13,7 +13,7 @@
     "baseUrl": {"type": "string", "format": "uri", "pattern": "^https?://", "maxLength": 191},
     "channelTypes": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1}}, "models": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
     "fetchMode": {"enum": ["per_task", "batch"]}, "allowedHosts": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
-    "upstreams": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/upstreamKind"}, "description": "Upstream kinds the driver addresses. vendor is implied; new_api makes the plugin bindable to type-60 New API channels."},
+    "upstreams": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/upstreamKind"}, "description": "Upstream kinds the driver addresses. vendor is implied; new_api makes the plugin bindable to type-60 D Pin channels."},
     "protocols": {"type": "array", "uniqueItems": true, "items": {"oneOf": [
       {"enum": ["openai_video", "openai_image"]},
       {"type": "object", "additionalProperties": false, "required": ["name", "supports"], "properties": {"name": {"const": "openai_responses"}, "supports": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["stream", "sync", "background"]}}, "models": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}}},
@@ -111,7 +111,7 @@
       "additionalProperties": false,
       "required": ["kind"],
       "properties": {"kind": {"$ref": "#/$defs/upstreamKind"}},
-      "description": "Host-injected on every driver hook context; new_api means the executing channel is a type-60 New API channel with Bearer credentials already applied."
+      "description": "Host-injected on every driver hook context; new_api means the executing channel is a type-60 D Pin channel with Bearer credentials already applied."
     },
     "taskQueryContext": {
       "type": "object",

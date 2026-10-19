@@ -2,7 +2,7 @@
 
 ![new-api](/web/public/logo.png)
 
-# New API
+# D Pin
 
 **连接模型、应用与 Agent 的 AI 网关**
 
@@ -58,7 +58,7 @@
 
 ## 📝 项目说明
 
-New API 是面向应用、Agent 和团队的自托管 AI 网关。将不同厂商的模型服务接入统一入口，在同一套控制台中管理渠道、访问权限、用量与成本。
+D Pin 是面向应用、Agent 和团队的自托管 AI 网关。将不同厂商的模型服务接入统一入口，在同一套控制台中管理渠道、访问权限、用量与成本。
 
 你可以用它为团队分配已授权的模型资源，在切换上游时减少客户端改动，或搭建自己的多模型服务。支持接入 OpenAI、Anthropic、Google Gemini、Azure OpenAI、AWS Bedrock、Vertex AI、DeepSeek、通义千问及其他兼容服务。
 
@@ -182,7 +182,7 @@ docker run --name new-api -d --restart unless-stopped \
 1. 新建渠道，填写上游 API Key、可用模型和所属分组，执行渠道测试。
 2. 配置模型价格，确保调用用户有可用额度或有效订阅。
 3. 在控制台创建 API Key，确保它能访问对应分组和模型。
-4. 对于 OpenAI 兼容客户端，将 Base URL 设为 `http://localhost:3000/v1`，密钥使用 **New API 签发的 Key**。
+4. 对于 OpenAI 兼容客户端，将 Base URL 设为 `http://localhost:3000/v1`，密钥使用 **D Pin 签发的 Key**。
 
 在终端中将 `NEW_API_KEY` 环境变量设为该密钥，查询它可以访问的模型：
 
@@ -206,7 +206,7 @@ curl --fail-with-body http://localhost:3000/v1/responses \
 
 ### Docker Compose
 
-仓库的 [Compose 配置](./docker-compose.yml) 默认启动 **New API + PostgreSQL + Redis**，并提供 MySQL 和独立 ClickHouse 日志库的配置示例。
+仓库的 [Compose 配置](./docker-compose.yml) 默认启动 **D Pin + PostgreSQL + Redis**，并提供 MySQL 和独立 ClickHouse 日志库的配置示例。
 
 ```bash
 git clone https://github.com/QuantumNous/new-api.git
@@ -314,7 +314,7 @@ bun run dev -- --port 5173
 | 项目 | 说明 |
 |------|------|
 | [new-api-key-tool](https://github.com/Calcium-Ion/new-api-key-tool) | Key 额度查询工具 |
-| [new-api-horizon](https://github.com/Calcium-Ion/new-api-horizon) | New API 高性能优化版 |
+| [new-api-horizon](https://github.com/Calcium-Ion/new-api-horizon) | D Pin 高性能优化版 |
 
 ---
 
@@ -322,7 +322,7 @@ bun run dev -- --port 5173
 
 本项目采用 [GNU Affero 通用公共许可证 v3.0 (AGPLv3)](./LICENSE) 授权。
 
-根据 AGPLv3 第 7 条，本项目还适用[附加条款](./NOTICE)。修改版本必须在适当法律声明及界面中显著的关于、法律、页脚或署名位置保留作者署名 `Frontend design and development by New API contributors.`，并保留指向原项目 <https://github.com/QuantumNous/new-api> 的可见链接。
+根据 AGPLv3 第 7 条，本项目还适用[附加条款](./NOTICE)。修改版本必须在适当法律声明及界面中显著的关于、法律、页脚或署名位置保留作者署名 `Frontend design and development by D Pin contributors.`，并保留指向原项目 <https://github.com/QuantumNous/new-api> 的可见链接。
 
 本项目为开源项目，在 [One API](https://github.com/songquanpeng/one-api)（MIT 许可证）的基础上进行二次开发。
 
@@ -344,7 +344,7 @@ bun run dev -- --port 5173
 
 <div align="center">
 
-### 💖 感谢使用 New API
+### 💖 感谢使用 D Pin
 
 如果这个项目对你有帮助，欢迎给我们一个 ⭐️ Star！
 

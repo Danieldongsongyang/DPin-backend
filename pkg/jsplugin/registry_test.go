@@ -589,7 +589,7 @@ func TestRegistryValidatesChannelTypes(t *testing.T) {
 		{name: "zero rejected", channelTypes: []int{0}, wantErr: "positive channel types"},
 		{name: "negative rejected", channelTypes: []int{-1}, wantErr: "positive channel types"},
 		{name: "task plugin type rejected", channelTypes: []int{constant.ChannelTypeTaskPlugin}, wantErr: "task plugin channel type"},
-		{name: "new api type rejected", channelTypes: []int{constant.ChannelTypeNewAPI}, wantErr: "New API channel type"},
+		{name: "D Pin type rejected", channelTypes: []int{constant.ChannelTypeNewAPI}, wantErr: "D Pin channel type"},
 		{name: "duplicates rejected", channelTypes: []int{1, 1}, wantErr: "must be unique"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1216,8 +1216,8 @@ func TestUpstreamsManifestContract(t *testing.T) {
 	}{
 		{"omitted implies vendor", "", true, false},
 		{"vendor only", `upstreams:["vendor"],`, true, false},
-		{"vendor and new api", `upstreams:["vendor","new_api"],`, true, true},
-		{"new api only still serves its vendor", `upstreams:["new_api"],`, true, true},
+		{"vendor and D Pin", `upstreams:["vendor","new_api"],`, true, true},
+		{"D Pin only still serves its vendor", `upstreams:["new_api"],`, true, true},
 		{"unknown kind", `upstreams:["gateway"],`, false, false},
 		{"duplicate", `upstreams:["new_api","new_api"],`, false, false},
 		{"null", `upstreams:null,`, false, false},

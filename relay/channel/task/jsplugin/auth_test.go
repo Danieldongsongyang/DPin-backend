@@ -101,10 +101,10 @@ func TestUpstreamContextsUseGatewayBearerOnNewAPIChannels(t *testing.T) {
 		wantAuthHeader string
 		wantAPIKey     any // nil when the raw key must stay hidden from the plugin
 	}{
-		{"api key plugin on a New API channel", "", constant.ChannelTypeNewAPI, "sk-gateway", pluginruntime.UpstreamKindNewAPI, "Bearer sk-gateway", "sk-gateway"},
+		{"api key plugin on a D Pin channel", "", constant.ChannelTypeNewAPI, "sk-gateway", pluginruntime.UpstreamKindNewAPI, "Bearer sk-gateway", "sk-gateway"},
 		{"api key plugin on a Task Plugin channel", "", constant.ChannelTypeTaskPlugin, "vendor-key", pluginruntime.UpstreamKindVendor, "vendor-key", "vendor-key"},
 		{"api key plugin on a legacy channel", "", 1002, "vendor-key", pluginruntime.UpstreamKindVendor, "vendor-key", "vendor-key"},
-		{"oauth2_jwt plugin on a New API channel", `,auth:{type:"oauth2_jwt"}`, constant.ChannelTypeNewAPI, "sk-gateway", pluginruntime.UpstreamKindNewAPI, "Bearer sk-gateway", "sk-gateway"},
+		{"oauth2_jwt plugin on a D Pin channel", `,auth:{type:"oauth2_jwt"}`, constant.ChannelTypeNewAPI, "sk-gateway", pluginruntime.UpstreamKindNewAPI, "Bearer sk-gateway", "sk-gateway"},
 		{"oauth2_jwt plugin on a Task Plugin channel", `,auth:{type:"oauth2_jwt"}`, constant.ChannelTypeTaskPlugin, string(credentials), pluginruntime.UpstreamKindVendor, "Bearer access-token", nil},
 	}
 	for _, tc := range testCases {
@@ -151,5 +151,5 @@ export function buildContentRequest(ctx){return {url:ctx.baseUrl+"/content/"+ctx
 			}
 		})
 	}
-	assert.Equal(t, 1, exchanges, "the vendor token exchange runs only for the oauth2_jwt vendor channel, never for a New API channel")
+	assert.Equal(t, 1, exchanges, "the vendor token exchange runs only for the oauth2_jwt vendor channel, never for a D Pin channel")
 }

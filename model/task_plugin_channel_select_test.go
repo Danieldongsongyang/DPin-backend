@@ -103,7 +103,7 @@ func TestNewAPIChannelServesExtendedTaskPlugins(t *testing.T) {
 	selected, err = GetChannel("default", "shared", 0, identityFilters("delta", nil))
 	require.NoError(t, err)
 	require.NotNil(t, selected)
-	assert.Equal(t, "gateway-single", selected.Name, "a single task_plugin_key still binds a New API channel")
+	assert.Equal(t, "gateway-single", selected.Name, "a single task_plugin_key still binds a D Pin channel")
 	selected, err = GetChannel("default", "shared", 0, identityFilters("beta", nil))
 	require.NoError(t, err)
 	assert.Nil(t, selected, "unbound plugins never reach the gateway channel")

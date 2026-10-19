@@ -344,7 +344,7 @@ function viaNewAPI(ctx) {
   return !!(ctx.upstream && ctx.upstream.kind === "new_api");
 }
 
-// Another New API gateway serves the DashScope wire format only on this
+// Another D Pin gateway serves the DashScope wire format only on this
 // plugin's /ali native routes; DashScope itself serves the unprefixed paths.
 function apiRoot(ctx) {
   return ctx.baseUrl + (viaNewAPI(ctx) ? "/ali" : "");

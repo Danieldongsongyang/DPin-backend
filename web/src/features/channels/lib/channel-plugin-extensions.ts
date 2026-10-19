@@ -44,7 +44,7 @@ export function supportsChannelPluginExtensions(channelType: number): boolean {
   )
 }
 
-// A New API channel proxies an upstream gateway that may host many plugins,
+// A D Pin channel proxies an upstream gateway that may host many plugins,
 // so the administrator lists the plugins the channel is extended with. The
 // single task_plugin_key stays valid there and is shown together with the list.
 export function readTaskExtendPluginKeys(
@@ -67,7 +67,7 @@ export function readTaskExtendPluginKeys(
   return [...new Set(single ? [single, ...keys] : keys)]
 }
 
-// A New API channel proxies another gateway, which serves a plugin's wire
+// A D Pin channel proxies another gateway, which serves a plugin's wire
 // format only on the plugin's own native routes. Only drivers that declare
 // they address such a gateway can be bound there; the server rejects the rest.
 export function supportsNewAPIUpstream(

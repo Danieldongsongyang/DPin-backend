@@ -1982,7 +1982,7 @@ func TestAlibabaSubmitDeltaDoesNotMutateControlState(t *testing.T) {
 	assert.JSONEq(t, `{"choices":[{"count":2,"lastText":false,"finishReason":"stop"}],"hasUsage":true}`, string(encoded))
 }
 
-// newAPIGateway emulates the upstream New API instance a type-60 channel
+// newAPIGateway emulates the upstream D Pin instance a type-60 channel
 // points at: it answers only on the plugin's prefixed native routes, requires
 // the gateway token as a Bearer header, and renders what its own presenters
 // render (the public task id already substituted into the id fields).

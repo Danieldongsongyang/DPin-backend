@@ -661,7 +661,7 @@ func TestResponsesWebSocketDialsNativeResponsesChannelTypes(t *testing.T) {
 		otherSettings dto.ChannelOtherSettings
 		want          func(key string) upstreamTarget
 	}{
-		{name: "new api", channelType: constant.ChannelTypeNewAPI, want: bearer},
+		{name: "D Pin", channelType: constant.ChannelTypeNewAPI, want: bearer},
 		{name: "sub2api", channelType: constant.ChannelTypeSub2API, want: bearer},
 		{name: "advanced custom query auth", channelType: constant.ChannelTypeAdvancedCustom, otherSettings: queryAuthRoute, want: func(key string) upstreamTarget {
 			return upstreamTarget{Path: "/upstream/responses", QueryKey: key}

@@ -53,7 +53,7 @@ export function getChannelTypeIcon(type: number): string {
     8: 'OpenAI', // Custom
     58: 'NewAPI', // Advanced Custom
     59: 'Sub2API', // Sub2API
-    60: 'NewAPI', // New API
+    60: 'NewAPI', // D Pin
     62: 'Vllm', // vLLM
     63: 'SGLang', // SGLang
     64: 'TypeSafe', // falls back to a neutral T icon when no brand icon exists

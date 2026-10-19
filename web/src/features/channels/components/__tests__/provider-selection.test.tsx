@@ -527,7 +527,7 @@ test.each(migratedProviders)(
 )
 
 test.each([true, false])(
-  'gateway category contains only New API and Sub2API without changing existing categories (plugin permission: %s)',
+  'gateway category contains only D Pin and Sub2API without changing existing categories (plugin permission: %s)',
   async (canBindPlugin) => {
     const user = userEvent.setup()
     const select = vi.fn()
@@ -546,7 +546,7 @@ test.each([true, false])(
     for (const category of ['All', 'Built-in', 'Gateways']) {
       await user.click(screen.getByRole('tab', { name: category }))
       expect(
-        screen.getByRole('option', { name: 'New API Built-in #60' })
+        screen.getByRole('option', { name: 'D Pin Built-in #60' })
       ).toBeVisible()
       expect(
         screen.getByRole('option', { name: 'Sub2API Built-in #59' })
@@ -554,7 +554,7 @@ test.each([true, false])(
     }
     expect(screen.getAllByRole('option')).toHaveLength(2)
     await user.click(
-      screen.getByRole('option', { name: 'New API Built-in #60' })
+      screen.getByRole('option', { name: 'D Pin Built-in #60' })
     )
     expect(select).toHaveBeenLastCalledWith({ kind: 'builtin', type: 60 })
     const search = screen.getByRole('combobox')
@@ -755,7 +755,7 @@ test('deprecated and flexible integration badges preserve provider selection and
   expect(select).toHaveBeenNthCalledWith(1, { kind: 'builtin', type: 8 })
 
   const details =
-    "New API's flexible channel lets you configure upstream addresses and authentication per endpoint, choose native forwarding or supported protocol conversions, and configure model listing and balance queries independently"
+    "D Pin's flexible channel lets you configure upstream addresses and authentication per endpoint, choose native forwarding or supported protocol conversions, and configure model listing and balance queries independently"
   expect(advanced).toHaveAccessibleDescription(
     `Flexible integration · ${details}`
   )

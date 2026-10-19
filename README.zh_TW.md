@@ -2,7 +2,7 @@
 
 ![new-api](/web/public/logo.png)
 
-# New API
+# D Pin
 
 **連接模型、應用程式與 Agent 的 AI 閘道**
 
@@ -56,7 +56,7 @@
 
 ## 📝 項目說明
 
-New API 是面向應用程式、Agent 和團隊的自託管 AI 閘道。將不同供應商的模型服務接入統一入口，在同一套控制台中管理渠道、存取權限、用量與成本。
+D Pin 是面向應用程式、Agent 和團隊的自託管 AI 閘道。將不同供應商的模型服務接入統一入口，在同一套控制台中管理渠道、存取權限、用量與成本。
 
 你可以用它為團隊分配已授權的模型資源，在切換上游時減少用戶端改動，或建置自己的多模型服務。支援接入 OpenAI、Anthropic、Google Gemini、Azure OpenAI、AWS Bedrock、Vertex AI、DeepSeek、通義千問及其他相容服務。
 
@@ -166,7 +166,7 @@ docker run --name new-api -d --restart unless-stopped \
 1. 新增渠道，填寫上游 API Key、可用模型和所屬群組，執行渠道測試。
 2. 設定模型價格，確保呼叫使用者有可用額度或有效訂閱。
 3. 在控制台建立 API Key，確保它能存取對應群組和模型。
-4. 對於 OpenAI 相容用戶端，將 Base URL 設為 `http://localhost:3000/v1`，金鑰使用 **New API 簽發的 Key**。
+4. 對於 OpenAI 相容用戶端，將 Base URL 設為 `http://localhost:3000/v1`，金鑰使用 **D Pin 簽發的 Key**。
 
 在終端機中將 `NEW_API_KEY` 環境變數設為該金鑰，查詢它可以存取的模型：
 
@@ -190,7 +190,7 @@ curl --fail-with-body http://localhost:3000/v1/responses \
 
 ### Docker Compose
 
-儲存庫的 [Compose 設定](./docker-compose.yml) 預設啟動 **New API + PostgreSQL + Redis**，並提供 MySQL 和獨立 ClickHouse 日誌資料庫的設定範例。
+儲存庫的 [Compose 設定](./docker-compose.yml) 預設啟動 **D Pin + PostgreSQL + Redis**，並提供 MySQL 和獨立 ClickHouse 日誌資料庫的設定範例。
 
 ```bash
 git clone https://github.com/QuantumNous/new-api.git
@@ -298,7 +298,7 @@ bun run dev -- --port 5173
 | 項目 | 說明 |
 |------|------|
 | [new-api-key-tool](https://github.com/Calcium-Ion/new-api-key-tool) | Key 額度查詢工具 |
-| [new-api-horizon](https://github.com/Calcium-Ion/new-api-horizon) | New API 高性能優化版 |
+| [new-api-horizon](https://github.com/Calcium-Ion/new-api-horizon) | D Pin 高性能優化版 |
 
 ---
 
@@ -306,7 +306,7 @@ bun run dev -- --port 5173
 
 本項目採用 [GNU Affero 通用公共許可證 v3.0 (AGPLv3)](./LICENSE) 授權。
 
-依據 AGPLv3 第 7 條，本專案另適用[附加條款](./NOTICE)。修改版本必須在適當法律聲明及介面中顯著的關於、法律、頁尾或署名位置保留作者署名 `Frontend design and development by New API contributors.`，並保留指向原專案 <https://github.com/QuantumNous/new-api> 的可見連結。
+依據 AGPLv3 第 7 條，本專案另適用[附加條款](./NOTICE)。修改版本必須在適當法律聲明及介面中顯著的關於、法律、頁尾或署名位置保留作者署名 `Frontend design and development by D Pin contributors.`，並保留指向原專案 <https://github.com/QuantumNous/new-api> 的可見連結。
 
 本項目為開源項目，在 [One API](https://github.com/songquanpeng/one-api)（MIT 許可證）的基礎上進行二次開發。
 
@@ -328,7 +328,7 @@ bun run dev -- --port 5173
 
 <div align="center">
 
-### 💖 感謝使用 New API
+### 💖 感謝使用 D Pin
 
 如果這個項目對你有幫助，歡迎給我們一個 ⭐️ Star！
 

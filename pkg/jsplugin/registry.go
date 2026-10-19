@@ -111,7 +111,7 @@ type Meta struct {
 
 // Upstream kinds a plugin driver can address. Every driver speaks to its
 // vendor; a driver that also builds its own native-route URLs when the channel
-// points at another New API gateway declares UpstreamKindNewAPI in
+// points at another D Pin gateway declares UpstreamKindNewAPI in
 // meta.upstreams, which is what makes it bindable to a type-60 channel.
 const (
 	UpstreamKindVendor = "vendor"
@@ -1288,7 +1288,7 @@ func normalizeV1Meta(meta *Meta) error {
 			return fmt.Errorf("plugin meta channelTypes must not contain the task plugin channel type")
 		}
 		if channelType == constant.ChannelTypeNewAPI {
-			return fmt.Errorf("plugin meta channelTypes must not contain the New API channel type; bind the plugin through task_extend_plugin_keys instead")
+			return fmt.Errorf("plugin meta channelTypes must not contain the D Pin channel type; bind the plugin through task_extend_plugin_keys instead")
 		}
 		if _, duplicate := seenChannelTypes[channelType]; duplicate {
 			return fmt.Errorf("plugin meta channelTypes must be unique")

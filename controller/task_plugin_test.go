@@ -495,7 +495,7 @@ export function parseTaskResult() { return {}; }
 		assert.Equal(t, "count", option.UsageProfiles[0].Schema["image_count"].Unit)
 		assert.Equal(t, "text:UO", option.Icon)
 		assert.Equal(t, []int{1990, 1991}, option.ChannelTypes)
-		assert.Equal(t, []string{"vendor", "new_api"}, option.Upstreams, "the New API channel form lists only plugins declaring new_api")
+		assert.Equal(t, []string{"vendor", "new_api"}, option.Upstreams, "the D Pin channel form lists only plugins declaring new_api")
 		assert.Equal(t, "http://localhost:9000", option.BaseURL, "the drawer prefills the normalized plugin default")
 		return
 	}

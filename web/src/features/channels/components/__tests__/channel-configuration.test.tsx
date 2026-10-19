@@ -74,7 +74,7 @@ const plugins: TaskPluginOption[] = [
     upstreams: ['vendor', 'new_api'],
   },
   {
-    // Vendor-only: bindable to a Task Plugin channel, never to a New API one.
+    // Vendor-only: bindable to a Task Plugin channel, never to a D Pin one.
     key: 'no-address',
     name: 'No Address',
     icon: 'text:NA',
@@ -251,7 +251,7 @@ test('changing built-in providers updates server-provided URL placeholders witho
   expect(geminiAddress).toHaveValue('')
 
   await user.click(screen.getByRole('button', { name: 'Change provider' }))
-  await user.click(screen.getByRole('option', { name: /^New API / }))
+  await user.click(screen.getByRole('option', { name: /^D Pin / }))
   expect(screen.getByRole('textbox', { name: 'Base URL' })).toHaveAttribute(
     'placeholder',
     'Leave empty to use default'
@@ -2749,7 +2749,7 @@ test('the header override passthrough template button confirms before filling th
   ).toBeChecked()
 })
 
-test('a New API channel binds upstream task plugins and publishes their models', async () => {
+test('a D Pin channel binds upstream task plugins and publishes their models', async () => {
   const channel = channelSchema.parse({
     ...editingChannel,
     type: 60,

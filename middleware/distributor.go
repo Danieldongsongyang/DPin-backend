@@ -206,7 +206,7 @@ func pinnedEndpointCandidateForChannel(c *gin.Context, channel *model.Channel, e
 			expectedOwned = true
 		}
 		if channel.Type == constant.ChannelTypeTaskPlugin || channel.Type == constant.ChannelTypeNewAPI {
-			// A New API channel may bind several candidates. The first bound
+			// A D Pin channel may bind several candidates. The first bound
 			// candidate in generation order executes, so the billing provider
 			// depends only on the channel and the request, never on which
 			// channels an earlier retry attempt happened to try.
