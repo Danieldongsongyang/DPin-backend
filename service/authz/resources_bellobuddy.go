@@ -2,15 +2,25 @@ package authz
 
 const ResourceBelloBuddyPlan = "bellobuddy_plan"
 const ResourceBelloBuddyBinding = "bellobuddy_job_binding"
+const ResourceBelloBuddyResume = "bellobuddy_resume_archive"
 
 var (
 	BelloBuddyPlanRead     = Permission{Resource: ResourceBelloBuddyPlan, Action: ActionRead}
 	BelloBuddyPlanWrite    = Permission{Resource: ResourceBelloBuddyPlan, Action: ActionWrite}
 	BelloBuddyBindingRead  = Permission{Resource: ResourceBelloBuddyBinding, Action: ActionRead}
 	BelloBuddyBindingWrite = Permission{Resource: ResourceBelloBuddyBinding, Action: ActionWrite}
+	BelloBuddyResumeRead   = Permission{Resource: ResourceBelloBuddyResume, Action: ActionRead}
+	BelloBuddyResumeWrite  = Permission{Resource: ResourceBelloBuddyResume, Action: ActionWrite}
 )
 
 func init() {
+	RegisterResource(ResourceDefinition{
+		Resource: ResourceBelloBuddyResume, LabelKey: "BelloBuddy resume archives",
+		Actions: []ActionDefinition{
+			{Action: ActionRead, LabelKey: "Read resume archive status", DescriptionKey: "View archive tasks, errors and private storage usage.", DefaultRoles: []string{BuiltInRoleAdmin}},
+			{Action: ActionWrite, LabelKey: "Abandon blocked resume archives", DescriptionKey: "Explicitly abandon a blocked task and delete its private PDF copy; preserve external receipts.", DefaultRoles: []string{BuiltInRoleAdmin}},
+		},
+	})
 	RegisterResource(ResourceDefinition{
 		Resource: ResourceBelloBuddyPlan, LabelKey: "BelloBuddy public plans",
 		Actions: []ActionDefinition{

@@ -339,7 +339,7 @@ func migrateDB() error {
 		common.SysError("failed to migrate options primary key: " + err.Error())
 	}
 
-	err := DB.AutoMigrate(
+	err := DB.AutoMigrate(append([]any{
 		&Channel{},
 		&Token{},
 		&User{},
@@ -382,7 +382,7 @@ func migrateDB() error {
 		&BelloBuddyJob{},
 		&BelloBuddyJobBinding{},
 		&BelloBuddyRelayIdentity{},
-	)
+	}, BelloBuddyResumeModels()...)...)
 	if err != nil {
 		return err
 	}

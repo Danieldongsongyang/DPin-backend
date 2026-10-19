@@ -21,6 +21,16 @@ func registerBelloBuddyRoutes(apiRouter *gin.RouterGroup) {
 	routes.PUT("/accounts/:accountKey/jobs/config/batch", controller.SaveBelloBuddyJobConfigBatch)
 	routes.POST("/accounts/:accountKey/runtime-config", controller.GetBelloBuddyRuntimeConfig)
 	routes.POST("/accounts/:accountKey/runtime-snapshot/renew", controller.RenewBelloBuddyRuntimeSnapshot)
+	archives := routes.Group("")
+	archives.Use(middleware.BelloBuddyResumeSession())
+	archives.POST("/accounts/:accountKey/job-catalog/syncs", controller.SyncBelloBuddyJobCatalog)
+	archives.GET("/accounts/:accountKey/job-catalog/syncs/:syncId", controller.GetBelloBuddyJobCatalog)
+	archives.POST("/accounts/:accountKey/job-catalog/syncs/:syncId/reconcile", controller.ReconcileBelloBuddyJobCatalog)
+	archives.POST("/accounts/:accountKey/jobs/:jobId/resume-archives", middleware.BelloBuddyResumeWriteRateLimit(), controller.ReceiveBelloBuddyResume)
+	archives.GET("/accounts/:accountKey/jobs/:jobId/resume-archives/by-upload/:uploadId", controller.GetBelloBuddyResumeUpload)
+	archives.GET("/resume-archives", controller.ListBelloBuddyResumeArchives)
+	archives.GET("/resume-archives/:archiveId", controller.GetBelloBuddyResumeArchive)
+	archives.POST("/resume-archives/:archiveId/reconcile", middleware.BelloBuddyResumeWriteRateLimit(), controller.ReconcileBelloBuddyResumeArchive)
 
 	ai := routes.Group("/ai")
 	ai.Use(middleware.RouteTag("relay"), middleware.BodyStorageCleanup(), controller.BelloBuddyAIResponse(), middleware.SystemPerformanceCheck())
@@ -46,4 +56,6 @@ func registerBelloBuddyRoutes(apiRouter *gin.RouterGroup) {
 	admin.POST("/job-bindings", middleware.RequirePermission(authz.BelloBuddyBindingWrite), controller.SaveBelloBuddyJobBinding)
 	admin.PUT("/job-bindings/:id", middleware.RequirePermission(authz.BelloBuddyBindingWrite), controller.SaveBelloBuddyJobBinding)
 	admin.PUT("/job-bindings/:id/jobs", middleware.RequirePermission(authz.BelloBuddyBindingWrite), controller.MapBelloBuddyJobsToBinding)
+	admin.GET("/resume-archives", middleware.BelloBuddyResumeSession(), middleware.RequirePermission(authz.BelloBuddyResumeRead), controller.AdminListBelloBuddyResumeArchives)
+	admin.POST("/resume-archives/:archiveId/abandon", middleware.BelloBuddyResumeSession(), middleware.RequirePermission(authz.BelloBuddyResumeWrite), controller.AbandonBelloBuddyResumeArchive)
 }

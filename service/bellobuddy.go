@@ -385,49 +385,57 @@ func SyncBelloBuddyJobs(userID int, accountKey string, input BelloBuddySyncInput
 		}
 		seen[job.JobID] = true
 	}
-	now := common.GetTimestamp()
 	result := &BelloBuddyJobsConfig{}
 	err := model.WithBelloBuddyAccount(userID, accountKey, true, func(tx *gorm.DB, account *model.BelloBuddyAccount) error {
-		if err := AdvanceBelloBuddyAccount(tx, account); err != nil {
+		if err := syncBelloBuddyJobMetadata(tx, account, input); err != nil {
 			return err
-		}
-		if err := tx.Model(account).Update("display_name", input.DisplayName).Error; err != nil {
-			return err
-		}
-		account.DisplayName = input.DisplayName
-		for _, inputJob := range input.Jobs {
-			var job model.BelloBuddyJob
-			err := tx.Where("account_id = ? AND job_hash = ?", account.ID, model.BelloBuddyIdentityHash(inputJob.JobID)).First(&job).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				job = model.BelloBuddyJob{AccountID: account.ID, JobHash: model.BelloBuddyIdentityHash(inputJob.JobID), JobID: inputJob.JobID, Name: inputJob.Name, City: inputJob.City, Online: *inputJob.Online, Version: 1, CreatedAt: now, UpdatedAt: now}
-				if !job.Online {
-					job.FilterMode = "skip_all"
-				}
-				if err := tx.Create(&job).Error; err != nil {
-					return err
-				}
-				continue
-			}
-			if err != nil {
-				return err
-			}
-			// 重启／刷新会重复同步。相同资料和有效配置不能令既有 AI 结果失效。
-			if job.Name == inputJob.Name && job.City == inputJob.City && job.Online == *inputJob.Online &&
-				(*inputJob.Online || (job.FilterMode == "skip_all" && job.FilterPlanID == 0 && job.GreetingLimit == 0)) {
-				continue
-			}
-			updates := map[string]any{"name": inputJob.Name, "city": inputJob.City, "online": *inputJob.Online, "version": job.Version + 1, "updated_at": now}
-			if !*inputJob.Online {
-				updates["filter_mode"], updates["filter_plan_id"], updates["greeting_limit"] = "skip_all", 0, 0
-			}
-			if err := tx.Model(&job).Updates(updates).Error; err != nil {
-				return err
-			}
 		}
 		result.Account = *account
 		return tx.Where("account_id = ?", account.ID).Order("id").Find(&result.Jobs).Error
 	})
 	return result, err
+}
+
+// 元信息与飞书待同步登记复用同一账号事务，保留原方案、绑定及下线规则。
+func syncBelloBuddyJobMetadata(tx *gorm.DB, account *model.BelloBuddyAccount, input BelloBuddySyncInput) error {
+	now := common.GetTimestamp()
+	if err := AdvanceBelloBuddyAccount(tx, account); err != nil {
+		return err
+	}
+	if err := tx.Model(account).Update("display_name", input.DisplayName).Error; err != nil {
+		return err
+	}
+	account.DisplayName = input.DisplayName
+	for _, inputJob := range input.Jobs {
+		var job model.BelloBuddyJob
+		err := tx.Where("account_id = ? AND job_hash = ?", account.ID, model.BelloBuddyIdentityHash(inputJob.JobID)).First(&job).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			job = model.BelloBuddyJob{AccountID: account.ID, JobHash: model.BelloBuddyIdentityHash(inputJob.JobID), JobID: inputJob.JobID, Name: inputJob.Name, City: inputJob.City, Online: *inputJob.Online, Version: 1, CreatedAt: now, UpdatedAt: now}
+			if !job.Online {
+				job.FilterMode = "skip_all"
+			}
+			if err := tx.Create(&job).Error; err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		// 重启／刷新会重复同步。相同资料和有效配置不能令既有 AI 结果失效。
+		if job.Name == inputJob.Name && job.City == inputJob.City && job.Online == *inputJob.Online &&
+			(*inputJob.Online || (job.FilterMode == "skip_all" && job.FilterPlanID == 0 && job.GreetingLimit == 0)) {
+			continue
+		}
+		updates := map[string]any{"name": inputJob.Name, "city": inputJob.City, "online": *inputJob.Online, "version": job.Version + 1, "updated_at": now}
+		if !*inputJob.Online {
+			updates["filter_mode"], updates["filter_plan_id"], updates["greeting_limit"] = "skip_all", 0, 0
+		}
+		if err := tx.Model(&job).Updates(updates).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func AdvanceBelloBuddyAccount(tx *gorm.DB, account *model.BelloBuddyAccount) error {

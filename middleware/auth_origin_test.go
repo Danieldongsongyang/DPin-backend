@@ -8,7 +8,30 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestBelloBuddyResumeExplicitSessionAndOrigin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, test := range []struct {
+		Token, Origin string
+		Want          int
+	}{
+		{"", "", 401}, {"Bearer synthetic-session", "https://evil.example", 403}, {"Bearer synthetic-session", "https://panel.example", 204}, {"Bearer synthetic-session", "", 204}, {"synthetic-session", "", 401},
+	} {
+		router := gin.New()
+		router.POST("/resume", BelloBuddyResumeSession(), func(c *gin.Context) { c.Status(204) })
+		request := httptest.NewRequest(http.MethodPost, "https://panel.example/resume", nil)
+		request.Header.Set("Authorization", test.Token)
+		if test.Origin != "" {
+			request.Header.Set("Origin", test.Origin)
+		}
+		request.AddCookie(&http.Cookie{Name: "session", Value: "ambient-cookie"})
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		require.Equal(t, test.Want, response.Code)
+	}
+}
 
 func runOriginGuardRequest(t *testing.T, origin, referer string) *httptest.ResponseRecorder {
 	t.Helper()

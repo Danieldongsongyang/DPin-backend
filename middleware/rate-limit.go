@@ -178,6 +178,15 @@ func CriticalRateLimit() func(c *gin.Context) {
 	return defNext
 }
 
+// 后台简历上传/核对沿用敏感写入阈值，但不能消耗网页登录/刷新额度。
+// 状态读取不计入写入桶，归档上传与手动核对共用同一个独立桶。
+func BelloBuddyResumeWriteRateLimit() func(c *gin.Context) {
+	if common.CriticalRateLimitEnable {
+		return rateLimitFactory(common.CriticalRateLimitNum, common.CriticalRateLimitDuration, "BBAW")
+	}
+	return defNext
+}
+
 func UserCriticalRateLimit(scope string) func(c *gin.Context) {
 	if !common.CriticalRateLimitEnable {
 		return defNext
