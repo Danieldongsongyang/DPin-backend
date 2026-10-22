@@ -4,9 +4,10 @@
   "private": false,
   "type": "module",
   "scripts": {
-    "dev": "rsbuild dev",
-    "build": "rsbuild build",
-    "build:check": "tsgo -b && rsbuild build",
+    "dev": "bun run build:editors && rsbuild dev",
+    "build:editors": "node scripts/build-plan-editors.mjs",
+    "build": "bun run build:editors && rsbuild build",
+    "build:check": "tsgo -b && bun run build",
     "typecheck": "tsgo -b",
     "lint": "oxlint -c .oxlintrc.json .",
     "lint:fix": "oxlint -c .oxlintrc.json . --fix",

@@ -40,7 +40,9 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import type { SidebarData } from '@/components/layout/types'
+import { hasPermission } from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 /**
  * Root navigation groups for the application sidebar.
@@ -50,6 +52,7 @@ import { ROLE } from '@/lib/roles'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
 
   return {
     navGroups: [
@@ -143,6 +146,9 @@ export function useSidebarData(): SidebarData {
             icon: Users,
             requiredRole: ROLE.ADMIN,
           },
+          ...(user && user.role >= ROLE.ADMIN && hasPermission(user, 'bellobuddy_plan', 'read')
+            ? [{ title: t('Plan management'), url: '/bellobuddy-plans', icon: ClipboardList, requiredRole: ROLE.ADMIN }]
+            : []),
           {
             title: t('Models'),
             url: '/models/metadata',

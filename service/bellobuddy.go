@@ -58,6 +58,7 @@ type BelloBuddyJobInput struct {
 }
 
 type BelloBuddySyncInput struct {
+	Platform    string               `json:"platform,omitempty"`
 	DisplayName string               `json:"display_name"`
 	Jobs        []BelloBuddyJobInput `json:"jobs"`
 }
@@ -312,24 +313,50 @@ func GetBelloBuddyPlan(db *gorm.DB, userID, planID int, kind string, enabled boo
 }
 
 func SaveBelloBuddyPlan(userID, planID int, public bool, input BelloBuddyPlanInput) (*BelloBuddyPlanDetail, error) {
+	return saveBelloBuddyPlan(userID, planID, public, false, input)
+}
+
+func saveBelloBuddyPlan(userID, planID int, administrator, all bool, input BelloBuddyPlanInput) (*BelloBuddyPlanDetail, error) {
 	if err := ValidateBelloBuddyPlan(input); err != nil {
 		return nil, err
 	}
 	var plan model.BelloBuddyPlan
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		visibility, ownerID := "private", userID
-		if public {
+		if administrator {
 			visibility, ownerID = "public", 0
 		}
-		if input.FilterPlanID != 0 {
-			filter, err := GetBelloBuddyPlan(tx, userID, input.FilterPlanID, "filter", true)
-			if err != nil {
+		if planID != 0 {
+			query := tx.Where("id = ? AND visibility = ? AND owner_id = ?", planID, visibility, ownerID)
+			if administrator {
+				query = BelloBuddyAdminPlans(tx, all).Where("bello_buddy_plans.id = ?", planID)
+			}
+			if err := query.First(&plan).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrBelloBuddyNotFound
+				}
 				return err
 			}
-			if public && filter.Visibility != "public" {
-				return belloInvalid("公用沟通方案只能关联公用筛选方案")
+			visibility, ownerID = plan.Visibility, plan.OwnerID
+			if input.Kind != plan.Kind || input.ExpectedVersion <= 0 || input.ExpectedVersion != plan.Version {
+				return ErrBelloBuddyConflict
 			}
-			if err := validateBelloBuddyFilterReference(input.Content, filter); err != nil {
+		}
+		if input.FilterPlanID != 0 {
+			target := model.BelloBuddyPlan{Visibility: visibility, OwnerID: ownerID}
+			query := BelloBuddyPlanFilterScope(tx.Model(&model.BelloBuddyPlan{}), &target).Where("bello_buddy_plans.id = ?", input.FilterPlanID)
+			// 管理员可保留原合法停用关联；新增或换绑仍须启用。
+			if !administrator || planID == 0 || input.FilterPlanID != plan.FilterPlanID {
+				query = query.Where("bello_buddy_plans.enabled = ?", true)
+			}
+			var filter model.BelloBuddyPlan
+			if err := query.First(&filter).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrBelloBuddyNotFound
+				}
+				return err
+			}
+			if err := validateBelloBuddyFilterReference(input.Content, &filter); err != nil {
 				return err
 			}
 		}
@@ -340,15 +367,6 @@ func SaveBelloBuddyPlan(userID, planID int, public bool, input BelloBuddyPlanInp
 			}
 			plan = model.BelloBuddyPlan{Kind: input.Kind, Name: input.Name, Visibility: visibility, OwnerID: ownerID, Enabled: *input.Enabled, Content: string(input.Content), SchemaVersion: input.SchemaVersion, Version: 1, FilterPlanID: input.FilterPlanID, CreatedAt: now, UpdatedAt: now}
 			return tx.Create(&plan).Error
-		}
-		if err := tx.Where("id = ? AND visibility = ? AND owner_id = ?", planID, visibility, ownerID).First(&plan).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrBelloBuddyNotFound
-			}
-			return err
-		}
-		if input.Kind != plan.Kind || input.ExpectedVersion <= 0 || input.ExpectedVersion != plan.Version {
-			return ErrBelloBuddyConflict
 		}
 		result := tx.Model(&plan).Where("version = ?", input.ExpectedVersion).Updates(map[string]any{
 			"name": input.Name, "enabled": *input.Enabled, "content": string(input.Content), "schema_version": input.SchemaVersion,
@@ -372,6 +390,12 @@ func SyncBelloBuddyJobs(userID int, accountKey string, input BelloBuddySyncInput
 	if err := ValidateBelloBuddyIdentifier(accountKey); err != nil {
 		return nil, err
 	}
+	if input.Platform == "" {
+		input.Platform = "boss"
+	}
+	if !slices.Contains([]string{"boss", "zhilian"}, input.Platform) {
+		return nil, belloInvalid("不支持的招聘渠道")
+	}
 	if len(input.Jobs) == 0 || len(input.Jobs) > BelloBuddyMaxJobs || utf8.RuneCountInString(input.DisplayName) > 128 {
 		return nil, belloInvalid("同步职位数量或账号名称无效")
 	}
@@ -386,7 +410,7 @@ func SyncBelloBuddyJobs(userID int, accountKey string, input BelloBuddySyncInput
 		seen[job.JobID] = true
 	}
 	result := &BelloBuddyJobsConfig{}
-	err := model.WithBelloBuddyAccount(userID, accountKey, true, func(tx *gorm.DB, account *model.BelloBuddyAccount) error {
+	err := model.WithBelloBuddyAccountPlatform(userID, accountKey, input.Platform, true, func(tx *gorm.DB, account *model.BelloBuddyAccount) error {
 		if err := syncBelloBuddyJobMetadata(tx, account, input); err != nil {
 			return err
 		}
@@ -628,6 +652,9 @@ func BelloBuddyErrorResponse(err error) *BelloBuddyError {
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return ErrBelloBuddyNotFound
+	}
+	if errors.Is(err, model.ErrBelloBuddyAccountPlatformConflict) {
+		return &BelloBuddyError{http.StatusConflict, "ACCOUNT_PLATFORM_CONFLICT", err.Error()}
 	}
 	common.SysError(fmt.Sprintf("BelloBuddy 配置操作失败：%T", err))
 	return &BelloBuddyError{http.StatusInternalServerError, "INTERNAL_ERROR", "配置服务暂时不可用"}

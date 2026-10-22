@@ -34,6 +34,7 @@ import { Route as PricingIndexRouteImport } from './routes/pricing/index'
 import { Route as RankingsIndexRouteImport } from './routes/rankings/index'
 import { Route as SetupIndexRouteImport } from './routes/setup/index'
 import { Route as authUserResetRouteImport } from './routes/(auth)/user/reset'
+import { Route as AuthenticatedBellobuddyPlansIndexRouteImport } from './routes/_authenticated/bellobuddy-plans/index'
 import { Route as AuthenticatedBellobuddyIndexRouteImport } from './routes/_authenticated/bellobuddy/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
 import { Route as AuthenticatedChatChatIdRouteImport } from './routes/_authenticated/chat/$chatId'
@@ -198,6 +199,12 @@ const authUserResetRoute = authUserResetRouteImport.update({
   path: '/user/reset',
   getParentRoute: () => authRouteRoute,
 } as any)
+const AuthenticatedBellobuddyPlansIndexRoute =
+  AuthenticatedBellobuddyPlansIndexRouteImport.update({
+    id: '/bellobuddy-plans/',
+    path: '/bellobuddy-plans/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedBellobuddyIndexRoute =
   AuthenticatedBellobuddyIndexRouteImport.update({
     id: '/bellobuddy/',
@@ -459,6 +466,7 @@ export interface FileRoutesByFullPath {
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
+  '/bellobuddy-plans/': typeof AuthenticatedBellobuddyPlansIndexRoute
   '/bellobuddy/': typeof AuthenticatedBellobuddyIndexRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
@@ -522,6 +530,7 @@ export interface FileRoutesByTo {
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
+  '/bellobuddy-plans': typeof AuthenticatedBellobuddyPlansIndexRoute
   '/bellobuddy': typeof AuthenticatedBellobuddyIndexRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
@@ -589,6 +598,7 @@ export interface FileRoutesById {
   '/_authenticated/models/$section': typeof AuthenticatedModelsSectionRoute
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/_authenticated/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
+  '/_authenticated/bellobuddy-plans/': typeof AuthenticatedBellobuddyPlansIndexRoute
   '/_authenticated/bellobuddy/': typeof AuthenticatedBellobuddyIndexRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
@@ -655,6 +665,7 @@ export interface FileRouteTypes {
     | '/models/$section'
     | '/usage-logs/$section'
     | '/usage-logs/audit'
+    | '/bellobuddy-plans/'
     | '/bellobuddy/'
     | '/channels/'
     | '/dashboard/'
@@ -718,6 +729,7 @@ export interface FileRouteTypes {
     | '/models/$section'
     | '/usage-logs/$section'
     | '/usage-logs/audit'
+    | '/bellobuddy-plans'
     | '/bellobuddy'
     | '/channels'
     | '/dashboard'
@@ -784,6 +796,7 @@ export interface FileRouteTypes {
     | '/_authenticated/models/$section'
     | '/_authenticated/usage-logs/$section'
     | '/_authenticated/usage-logs/audit'
+    | '/_authenticated/bellobuddy-plans/'
     | '/_authenticated/bellobuddy/'
     | '/_authenticated/channels/'
     | '/_authenticated/dashboard/'
@@ -1014,6 +1027,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/user/reset'
       preLoaderRoute: typeof authUserResetRouteImport
       parentRoute: typeof authRouteRoute
+    }
+    '/_authenticated/bellobuddy-plans/': {
+      id: '/_authenticated/bellobuddy-plans/'
+      path: '/bellobuddy-plans'
+      fullPath: '/bellobuddy-plans/'
+      preLoaderRoute: typeof AuthenticatedBellobuddyPlansIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/bellobuddy/': {
       id: '/_authenticated/bellobuddy/'
@@ -1389,6 +1409,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedModelsSectionRoute: typeof AuthenticatedModelsSectionRoute
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
   AuthenticatedUsageLogsAuditRoute: typeof AuthenticatedUsageLogsAuditRoute
+  AuthenticatedBellobuddyPlansIndexRoute: typeof AuthenticatedBellobuddyPlansIndexRoute
   AuthenticatedBellobuddyIndexRoute: typeof AuthenticatedBellobuddyIndexRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
@@ -1416,6 +1437,8 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedModelsSectionRoute: AuthenticatedModelsSectionRoute,
   AuthenticatedUsageLogsSectionRoute: AuthenticatedUsageLogsSectionRoute,
   AuthenticatedUsageLogsAuditRoute: AuthenticatedUsageLogsAuditRoute,
+  AuthenticatedBellobuddyPlansIndexRoute:
+    AuthenticatedBellobuddyPlansIndexRoute,
   AuthenticatedBellobuddyIndexRoute: AuthenticatedBellobuddyIndexRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,

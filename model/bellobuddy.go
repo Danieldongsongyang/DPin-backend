@@ -3,6 +3,7 @@ package model
 import (
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
@@ -122,10 +123,21 @@ func BelloBuddyVisiblePlans(db *gorm.DB, userID int) *gorm.DB {
 
 // 所有职位写入及启动读取使用同一账号锁，保证批量配置和完整快照的一致性。
 func WithBelloBuddyAccount(userID int, accountKey string, register bool, fn func(*gorm.DB, *BelloBuddyAccount) error) error {
+	platform := ""
+	if register {
+		platform = "boss"
+	}
+	return WithBelloBuddyAccountPlatform(userID, accountKey, platform, register, fn)
+}
+
+var ErrBelloBuddyAccountPlatformConflict = errors.New("招聘账号的已登记渠道与本次渠道不一致")
+
+// 平台在首次登记时固定；读取未指定平台时沿用已登记归属，不覆盖已有账号。
+func WithBelloBuddyAccountPlatform(userID int, accountKey, platform string, register bool, fn func(*gorm.DB, *BelloBuddyAccount) error) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
 		if register {
 			now := common.GetTimestamp()
-			account := BelloBuddyAccount{UserID: userID, AccountKey: accountKey, AccountHash: BelloBuddyIdentityHash(accountKey), Platform: "boss", Version: 1, CreatedAt: now, UpdatedAt: now}
+			account := BelloBuddyAccount{UserID: userID, AccountKey: accountKey, AccountHash: BelloBuddyIdentityHash(accountKey), Platform: platform, Version: 1, CreatedAt: now, UpdatedAt: now}
 			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error; err != nil {
 				return err
 			}
@@ -133,6 +145,9 @@ func WithBelloBuddyAccount(userID int, accountKey string, register bool, fn func
 		var account BelloBuddyAccount
 		if err := lockForUpdate(tx).Where("user_id = ? AND account_hash = ?", userID, BelloBuddyIdentityHash(accountKey)).First(&account).Error; err != nil {
 			return err
+		}
+		if platform != "" && account.Platform != platform {
+			return ErrBelloBuddyAccountPlatformConflict
 		}
 		return fn(tx, &account)
 	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})

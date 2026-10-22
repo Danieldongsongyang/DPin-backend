@@ -12,6 +12,7 @@ build
 *.db-wal
 logs
 web/dist
+web/public/plan-editors/
 web/node_modules
 .env
 one-api

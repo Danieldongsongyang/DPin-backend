@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -114,10 +116,15 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, initializedDB.Close())
 			model.DB = db
+			common.IsMasterNode = true
+			authzErr := authz.Init(db)
+			common.IsMasterNode = oldMaster
+			require.NoError(t, authzErr)
 			users := []model.User{
 				{Username: "bello-owner", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1},
 				{Username: "bello-other", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1},
 				{Username: "bello-admin", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1},
+				{Username: "bello-admin10", Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1},
 			}
 			tokens := make([]string, len(users))
 			for i := range users {
@@ -186,6 +193,53 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			request(http.MethodGet, "/plans", tokens[1], nil, http.StatusUnauthorized)
 			require.NoError(t, db.Model(&users[1]).Update("status", common.UserStatusEnabled).Error)
 			request(http.MethodPost, "/admin/plans", tokens[0], nil, http.StatusForbidden)
+			t.Run("智联渠道归属与BOSS隔离", func(t *testing.T) {
+				syncJobs := func(key string, platform any, name string, status int) service.BelloBuddyJobsConfig {
+					t.Helper()
+					body := map[string]any{"display_name": name, "jobs": []map[string]any{{"job_id": "platform-job", "name": name, "online": true}}}
+					if platform != nil {
+						body["platform"] = platform
+					}
+					raw := request(http.MethodPost, "/accounts/"+key+"/jobs/sync", tokens[0], body, status)
+					var result service.BelloBuddyJobsConfig
+					if status == http.StatusOK {
+						require.NoError(t, common.Unmarshal(raw, &result))
+					}
+					return result
+				}
+				boss := syncJobs("platform-boss", nil, "原BOSS职位", http.StatusOK)
+				assert.Equal(t, "boss", boss.Account.Platform)
+				zhilian := syncJobs("platform-zhilian", "zhilian", "外联讲解主管", http.StatusOK)
+				assert.Equal(t, "zhilian", zhilian.Account.Platform)
+				require.Len(t, zhilian.Jobs, 1)
+				limit := 20
+				selection := map[string]any{"jobs": []service.BelloBuddyJobConfigInput{{JobID: "platform-job", ExpectedVersion: zhilian.Jobs[0].Version, FilterMode: "pass_all", CommunicationMode: "jump", GreetingLimit: &limit}}}
+				var saved service.BelloBuddyJobsConfig
+				require.NoError(t, common.Unmarshal(request(http.MethodPut, "/accounts/platform-zhilian/jobs/config/batch", tokens[0], selection, http.StatusOK), &saved))
+				assert.Equal(t, "zhilian", saved.Account.Platform)
+				assert.Equal(t, "pass_all", saved.Jobs[0].FilterMode)
+				var runtime service.BelloBuddyRuntimeConfig
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/accounts/platform-zhilian/runtime-config", tokens[0], service.BelloBuddyRuntimeInput{JobIDs: []string{"platform-job"}, RunnerVersion: "platform-test", SchemaVersion: 1}, http.StatusOK), &runtime))
+				assert.Equal(t, "zhilian", runtime.Account.Platform)
+				assert.Equal(t, saved.Jobs[0].Version, runtime.Jobs[0].Version)
+				syncJobs("platform-boss", "zhilian", "不能覆盖BOSS", http.StatusConflict)
+				syncJobs("platform-zhilian", nil, "不能以默认BOSS覆盖智联", http.StatusConflict)
+				for key, expected := range map[string]service.BelloBuddyJobsConfig{"platform-boss": boss, "platform-zhilian": saved} {
+					var actual service.BelloBuddyJobsConfig
+					require.NoError(t, common.Unmarshal(request(http.MethodGet, "/accounts/"+key+"/jobs/config", tokens[0], nil, http.StatusOK), &actual))
+					assert.Equal(t, expected, actual, "渠道冲突不得修改账号、职位、配置或版本")
+				}
+				online := true
+				_, err := service.SyncBelloBuddyJobs(users[0].Id, "platform-boss", service.BelloBuddySyncInput{Platform: "zhilian", DisplayName: "冲突", Jobs: []service.BelloBuddyJobInput{{JobID: "platform-job", Name: "冲突", Online: &online}}})
+				assert.Equal(t, "ACCOUNT_PLATFORM_CONFLICT", service.BelloBuddyErrorResponse(err).Code)
+				for _, platform := range []any{"liepin", "zhipin", "ZHILIAN", " zhilian", 1} {
+					syncJobs("platform-invalid", platform, "未知渠道", http.StatusBadRequest)
+				}
+				var invalidCount int64
+				require.NoError(t, db.Model(&model.BelloBuddyAccount{}).Where("account_key = ?", "platform-invalid").Count(&invalidCount).Error)
+				assert.Zero(t, invalidCount)
+				request(http.MethodGet, "/accounts/platform-zhilian/jobs/config", tokens[1], nil, http.StatusNotFound)
+			})
 			enabled, limit := true, 50
 			// 使用实际已登记的三份完整方案，证明已知字段、嵌套值和旧元数据无损往返。
 			actualFilterID := 0
@@ -316,6 +370,140 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			var chat service.BelloBuddyPlanDetail
 			require.NoError(t, common.Unmarshal(request(http.MethodPost, "/plans", tokens[0], communication, http.StatusOK), &chat))
 			request(http.MethodPost, "/admin/plans", tokens[2], communication, http.StatusNotFound)
+			t.Run("管理员全部方案与归属关联", func(t *testing.T) {
+				// v5.0.0-8.2.1/8.2.2/8.2.3/8.3.1：功能、对象、归属字段均在服务端验证。
+				ownerInput := service.BelloBuddyPlanInput{Kind: "filter", Name: "__admin_plan_owner", Enabled: &enabled, SchemaVersion: 1,
+					Content: common.RawMessage("{\n  \"id\":\"admin-owner-filter\", \"schema_defs\":[\"FilterDef\"], \"name\":\"__admin_plan_owner\",\n  \"disabled\":false, \"any_fails\":[], \"any_passes\":[], \"unknown\":{\"large\":900719925474099312345,\"text\":\"compat-secret-value <>&\",\"missing_is_absent\":null}\n}")}
+				var ownerPlan, otherPlan service.BelloBuddyPlanDetail
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/plans", tokens[0], ownerInput, http.StatusOK), &ownerPlan))
+				otherInput := ownerInput
+				otherInput.Name = "__admin_plan_other"
+				otherInput.Content = common.RawMessage(strings.ReplaceAll(strings.ReplaceAll(string(ownerInput.Content), ownerInput.Name, otherInput.Name), "admin-owner-filter", "admin-other-filter"))
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/plans", tokens[1], otherInput, http.StatusOK), &otherPlan))
+				privateAdminPath := fmt.Sprintf("/admin/plans/%d", ownerPlan.ID)
+				request(http.MethodGet, privateAdminPath, tokens[0], nil, http.StatusForbidden)
+				request(http.MethodGet, privateAdminPath, tokens[3], nil, http.StatusNotFound)
+				request(http.MethodPut, privateAdminPath, tokens[3], ownerInput, http.StatusNotFound)
+				request(http.MethodGet, fmt.Sprintf("/plans/%d", ownerPlan.ID), tokens[1], nil, http.StatusNotFound)
+				var detail service.BelloBuddyAdminPlanDetail
+				require.NoError(t, common.Unmarshal(request(http.MethodGet, privateAdminPath, tokens[2], nil, http.StatusOK), &detail))
+				assert.Equal(t, users[0].Username, detail.OwnerUsername)
+				// 首次以原 content 接口创建时编码器会压缩 JSON；管理员字符串通道须逐字保留。
+				payload := map[string]any{"kind": ownerInput.Kind, "name": ownerInput.Name, "enabled": true, "schema_version": 1, "expected_version": detail.Version, "filter_plan_id": 0,
+					"content_json": string(ownerInput.Content), "visibility": "public", "owner_id": users[1].Id}
+				require.NoError(t, common.Unmarshal(request(http.MethodPut, privateAdminPath, tokens[2], payload, http.StatusOK), &detail))
+				assert.Equal(t, string(ownerInput.Content), detail.ContentJSON)
+				assert.Equal(t, "private", detail.Visibility)
+				assert.Equal(t, users[0].Id, detail.OwnerID)
+				request(http.MethodPut, privateAdminPath, tokens[2], payload, http.StatusConflict)
+				var stored model.BelloBuddyPlan
+				require.NoError(t, db.First(&stored, ownerPlan.ID).Error)
+				assert.Equal(t, string(ownerInput.Content), stored.Content)
+				assert.Equal(t, users[0].Id, stored.OwnerID)
+				assert.Equal(t, "private", stored.Visibility)
+				payload["expected_version"], payload["content"] = detail.Version, common.RawMessage(`{"different":true}`)
+				request(http.MethodPut, privateAdminPath, tokens[2], payload, http.StatusBadRequest)
+				delete(payload, "content")
+				require.NoError(t, common.Unmarshal(request(http.MethodGet, privateAdminPath, tokens[2], nil, http.StatusOK), &detail))
+				assert.Equal(t, string(ownerInput.Content), detail.ContentJSON)
+				assert.Contains(t, string(detail.Content), `900719925474099312345`)
+				request(http.MethodGet, fmt.Sprintf("/plans/%d", ownerPlan.ID), tokens[0], nil, http.StatusOK)
+				list := func(path, token string) []service.BelloBuddyAdminPlan {
+					t.Helper()
+					var result struct {
+						Items []service.BelloBuddyAdminPlan `json:"items"`
+						Total int64                         `json:"total"`
+					}
+					raw := request(http.MethodGet, path, token, nil, http.StatusOK)
+					require.NoError(t, common.Unmarshal(raw, &result))
+					assert.GreaterOrEqual(t, result.Total, int64(len(result.Items)))
+					assert.NotContains(t, string(raw), "content_json")
+					assert.NotContains(t, string(raw), "compat-secret-value")
+					return result.Items
+				}
+				items := list("/admin/plans?kind=filter&visibility=private&owner=bello-owner&keyword=__admin_plan_&enabled=true", tokens[2])
+				require.Len(t, items, 1)
+				assert.Equal(t, ownerPlan.ID, items[0].ID)
+				assert.Equal(t, users[0].Username, items[0].OwnerUsername)
+				items = list(fmt.Sprintf("/admin/plans?keyword=%d&owner=%d", otherPlan.ID, users[1].Id), tokens[2])
+				require.Len(t, items, 1)
+				assert.Equal(t, otherPlan.ID, items[0].ID)
+				assert.Empty(t, list(fmt.Sprintf("/admin/plans?keyword=%d&owner=%d", otherPlan.ID, users[0].Id), tokens[2]), "ID 查询不能绕过归属过滤")
+				assert.Empty(t, list("/admin/plans?visibility=private", tokens[3]))
+				for _, item := range list("/admin/plans", tokens[3]) {
+					assert.Equal(t, "public", item.Visibility)
+					assert.Equal(t, 0, item.OwnerID)
+					assert.Empty(t, item.OwnerUsername)
+				}
+				request(http.MethodGet, "/admin/plans?enabled=bogus", tokens[2], nil, http.StatusBadRequest)
+				request(http.MethodGet, "/admin/plans?visibility=bogus", tokens[2], nil, http.StatusBadRequest)
+				request(http.MethodGet, "/admin/plans", tokens[0], nil, http.StatusForbidden)
+				// 以普通管理员创建仍只能生成 owner_id=0 公用方案。
+				publicPayload := map[string]any{"kind": ownerInput.Kind, "name": ownerInput.Name, "enabled": true, "schema_version": 1, "expected_version": 0,
+					"content_json": string(ownerInput.Content), "visibility": "private", "owner_id": users[0].Id}
+				var publicAdmin service.BelloBuddyAdminPlanDetail
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/admin/plans", tokens[3], publicPayload, http.StatusOK), &publicAdmin))
+				assert.Equal(t, "public", publicAdmin.Visibility)
+				assert.Zero(t, publicAdmin.OwnerID)
+				publicPayload["expected_version"] = publicAdmin.Version
+				request(http.MethodPut, fmt.Sprintf("/admin/plans/%d", publicAdmin.ID), tokens[3], publicPayload, http.StatusOK)
+				privateChatInput := service.BelloBuddyPlanInput{Kind: "communication", Name: "__admin_plan_chat", Enabled: &enabled, SchemaVersion: 1, FilterPlanID: ownerPlan.ID,
+					Content: common.RawMessage(`{"id":"admin-chat","schema_defs":["BeiliaoConfig"],"scheme_name":"__admin_plan_chat","disabled":false,"conditions_as_match":true,"filter_def":{"id":"admin-owner-filter"}}`)}
+				var privateChat service.BelloBuddyPlanDetail
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/plans", tokens[0], privateChatInput, http.StatusOK), &privateChat))
+				candidatePath := fmt.Sprintf("/admin/plans?kind=filter&for_plan_id=%d", privateChat.ID)
+				ids := []int{}
+				for _, candidate := range list(candidatePath, tokens[2]) {
+					ids = append(ids, candidate.ID)
+					assert.True(t, candidate.Visibility == "public" || candidate.OwnerID == users[0].Id)
+					assert.True(t, candidate.Enabled)
+				}
+				assert.Contains(t, ids, ownerPlan.ID)
+				assert.Contains(t, ids, publicAdmin.ID)
+				assert.NotContains(t, ids, otherPlan.ID)
+				request(http.MethodGet, candidatePath, tokens[3], nil, http.StatusNotFound)
+				request(http.MethodGet, fmt.Sprintf("/admin/plans/%d?for_plan_id=%d", otherPlan.ID, privateChat.ID), tokens[2], nil, http.StatusNotFound)
+				request(http.MethodGet, fmt.Sprintf("/admin/plans/%d?for_plan_id=%d", ownerPlan.ID, privateChat.ID), tokens[2], nil, http.StatusOK)
+				request(http.MethodGet, fmt.Sprintf("/admin/plans?kind=filter&for_plan_id=%d", ownerPlan.ID), tokens[2], nil, http.StatusBadRequest)
+				privateChatInput.ExpectedVersion = privateChat.Version
+				privateChatInput.FilterPlanID = otherPlan.ID
+				privateChatInput.Content = common.RawMessage(strings.Replace(string(privateChatInput.Content), "admin-owner-filter", "admin-other-filter", 1))
+				privateChatPath := fmt.Sprintf("/admin/plans/%d", privateChat.ID)
+				request(http.MethodPut, privateChatPath, tokens[2], privateChatInput, http.StatusNotFound)
+				privateChatInput.FilterPlanID = ownerPlan.ID
+				privateChatInput.Content = common.RawMessage(strings.Replace(string(privateChatInput.Content), "admin-other-filter", "admin-owner-filter", 1))
+				request(http.MethodPost, "/admin/plans", tokens[2], privateChatInput, http.StatusNotFound)
+				// 原合法关联停用后可回显并保留，但不能成为新换绑候选。
+				require.NoError(t, db.Model(&model.BelloBuddyPlan{}).Where("id = ?", ownerPlan.ID).Update("enabled", false).Error)
+				ids = nil
+				for _, candidate := range list(candidatePath, tokens[2]) {
+					ids = append(ids, candidate.ID)
+				}
+				assert.NotContains(t, ids, ownerPlan.ID)
+				request(http.MethodGet, fmt.Sprintf("/admin/plans/%d?for_plan_id=%d", ownerPlan.ID, privateChat.ID), tokens[2], nil, http.StatusOK)
+				request(http.MethodPut, privateChatPath, tokens[2], privateChatInput, http.StatusOK)
+				request(http.MethodPut, privateChatPath, tokens[2], privateChatInput, http.StatusConflict)
+				privateChatInput.ExpectedVersion++
+				privateChatInput.FilterPlanID = publicAdmin.ID
+				request(http.MethodPut, privateChatPath, tokens[2], privateChatInput, http.StatusOK)
+				privateChatInput.ExpectedVersion++
+				privateChatInput.FilterPlanID = ownerPlan.ID
+				request(http.MethodPut, privateChatPath, tokens[2], privateChatInput, http.StatusNotFound)
+				request(http.MethodGet, fmt.Sprintf("/admin/plans/%d?for_plan_id=%d", ownerPlan.ID, privateChat.ID), tokens[2], nil, http.StatusNotFound)
+				items = list(fmt.Sprintf("/admin/plans?enabled=false&keyword=%d", ownerPlan.ID), tokens[2])
+				require.Len(t, items, 1)
+				var audit model.AuditLog
+				require.NoError(t, db.Where("action = ? AND user_id = ?", "bellobuddy.plan.update", users[2].Id).Order("id DESC").First(&audit).Error)
+				assert.Equal(t, common.RoleRootUser, audit.ActorRole)
+				require.NotNil(t, audit.Other.AdminInfo)
+				assert.Equal(t, users[2].Id, audit.Other.AdminInfo.AdminID)
+				require.NotNil(t, audit.Other.Op)
+				auditJSON, err := common.Marshal(audit.Other)
+				require.NoError(t, err)
+				assert.Contains(t, string(auditJSON), `"owner_id":`+strconv.Itoa(users[0].Id))
+				assert.NotContains(t, string(auditJSON), "compat-secret-value")
+				assert.NotContains(t, string(auditJSON), "content_json")
+			})
 			syncInput := service.BelloBuddySyncInput{DisplayName: "招聘账号", Jobs: []service.BelloBuddyJobInput{{JobID: "Job", Name: "售后主管", Online: &enabled}, {JobID: "job", Name: "另一个职位", Online: &enabled}}}
 			var synced service.BelloBuddyJobsConfig
 			require.NoError(t, common.Unmarshal(request(http.MethodPost, "/accounts/Account/jobs/sync", tokens[0], syncInput, http.StatusOK), &synced))

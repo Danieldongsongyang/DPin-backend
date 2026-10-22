@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -110,7 +111,8 @@ func ListBelloBuddyPlans(c *gin.Context) {
 	}
 	query := model.BelloBuddyVisiblePlans(model.DB, c.GetInt("id"))
 	if c.GetBool("bello_public_admin") {
-		query = model.DB.Model(&model.BelloBuddyPlan{}).Where("visibility = ?", "public")
+		listBelloBuddyAdminPlans(c, kind, page, pageSize)
+		return
 	}
 	if kind != "" {
 		query = query.Where("kind = ?", kind)
@@ -125,6 +127,78 @@ func ListBelloBuddyPlans(c *gin.Context) {
 	}
 	plans := []model.BelloBuddyPlan{}
 	err := query.Omit("content").Order("id DESC").Limit(pageSize).Offset((page - 1) * pageSize).Find(&plans).Error
+	belloReply(c, gin.H{"items": plans, "total": count, "page": page, "page_size": pageSize}, err)
+}
+
+func belloAdminPlanTarget(c *gin.Context) (*model.BelloBuddyPlan, bool) {
+	raw := c.Query("for_plan_id")
+	if raw == "" {
+		return nil, true
+	}
+	id, err := strconv.Atoi(raw)
+	if err != nil || id <= 0 {
+		belloReply(c, nil, &service.BelloBuddyError{Status: http.StatusBadRequest, Code: "INVALID_REQUEST", Message: "关联目标方案 ID 无效"})
+		return nil, false
+	}
+	plan, err := service.GetBelloBuddyAdminPlan(model.DB, id, c.GetInt("role") == common.RoleRootUser)
+	if err == nil && plan.Kind != "communication" {
+		err = &service.BelloBuddyError{Status: http.StatusBadRequest, Code: "INVALID_REQUEST", Message: "关联目标必须是沟通方案"}
+	}
+	if err != nil {
+		belloReply(c, nil, err)
+		return nil, false
+	}
+	return &plan.BelloBuddyPlan, true
+}
+
+func listBelloBuddyAdminPlans(c *gin.Context, kind string, page, pageSize int) {
+	visibility, enabled := c.Query("visibility"), c.Query("enabled")
+	if (visibility != "" && visibility != "public" && visibility != "private") || (enabled != "" && enabled != "true" && enabled != "false") || (c.Query("for_plan_id") != "" && kind != "filter") {
+		belloReply(c, nil, &service.BelloBuddyError{Status: http.StatusBadRequest, Code: "INVALID_REQUEST", Message: "方案筛选参数无效"})
+		return
+	}
+	target, ok := belloAdminPlanTarget(c)
+	if !ok {
+		return
+	}
+	query := service.BelloBuddyAdminPlanOwners(service.BelloBuddyAdminPlans(model.DB, c.GetInt("role") == common.RoleRootUser))
+	if target != nil {
+		query = service.BelloBuddyPlanFilterScope(query, target).Where("bello_buddy_plans.enabled = ?", true)
+	}
+	if kind != "" {
+		query = query.Where("bello_buddy_plans.kind = ?", kind)
+	}
+	if visibility != "" {
+		query = query.Where("bello_buddy_plans.visibility = ?", visibility)
+	}
+	if enabled != "" {
+		query = query.Where("bello_buddy_plans.enabled = ?", enabled == "true")
+	}
+	if name := c.Query("name"); name != "" {
+		query = query.Where("bello_buddy_plans.name LIKE ?", "%"+name+"%")
+	}
+	if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
+		if id, err := strconv.Atoi(keyword); err == nil && id > 0 {
+			query = query.Where("bello_buddy_plans.id = ? OR bello_buddy_plans.name LIKE ?", id, "%"+keyword+"%")
+		} else {
+			query = query.Where("bello_buddy_plans.name LIKE ?", "%"+keyword+"%")
+		}
+	}
+	if owner := strings.TrimSpace(c.Query("owner")); owner != "" {
+		if id, err := strconv.Atoi(owner); err == nil && id >= 0 {
+			query = query.Where("bello_buddy_plans.owner_id = ? OR bello_plan_owner.username LIKE ?", id, "%"+owner+"%")
+		} else {
+			query = query.Where("bello_plan_owner.username LIKE ?", "%"+owner+"%")
+		}
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		belloReply(c, nil, err)
+		return
+	}
+	plans := []service.BelloBuddyAdminPlan{}
+	err := query.Select("bello_buddy_plans.id, bello_buddy_plans.kind, bello_buddy_plans.name, bello_buddy_plans.visibility, bello_buddy_plans.owner_id, bello_buddy_plans.enabled, bello_buddy_plans.schema_version, bello_buddy_plans.version, bello_buddy_plans.filter_plan_id, bello_buddy_plans.created_at, bello_buddy_plans.updated_at, COALESCE(bello_plan_owner.username, '') AS owner_username").
+		Order("bello_buddy_plans.id DESC").Limit(pageSize).Offset((page - 1) * pageSize).Find(&plans).Error
 	belloReply(c, gin.H{"items": plans, "total": count, "page": page, "page_size": pageSize}, err)
 }
 
@@ -217,12 +291,27 @@ func GetBelloBuddyPlan(c *gin.Context) {
 	if !ok {
 		return
 	}
-	plan, err := service.GetBelloBuddyPlan(model.DB, c.GetInt("id"), id, "", false)
 	if c.GetBool("bello_public_admin") {
-		var public model.BelloBuddyPlan
-		err = model.DB.Where("id = ? AND visibility = ?", id, "public").First(&public).Error
-		plan = &public
+		target, ok := belloAdminPlanTarget(c)
+		if !ok {
+			return
+		}
+		plan, err := service.GetBelloBuddyAdminPlan(model.DB, id, c.GetInt("role") == common.RoleRootUser)
+		if err == nil && target != nil {
+			var filter model.BelloBuddyPlan
+			err = service.BelloBuddyPlanFilterScope(model.DB.Model(&model.BelloBuddyPlan{}), target).
+				Where("bello_buddy_plans.id = ? AND (bello_buddy_plans.enabled = ? OR bello_buddy_plans.id = ?)", id, true, target.FilterPlanID).First(&filter).Error
+			if err != nil {
+				err = service.ErrBelloBuddyNotFound
+			}
+		}
+		belloReply(c, plan, err)
+		if err == nil {
+			recordManageAuditFor(c, plan.OwnerID, "bellobuddy.plan.read", map[string]any{"plan_id": plan.ID, "kind": plan.Kind, "visibility": plan.Visibility, "owner_id": plan.OwnerID, "version": plan.Version})
+		}
+		return
 	}
+	plan, err := service.GetBelloBuddyPlan(model.DB, c.GetInt("id"), id, "", false)
 	if err != nil {
 		belloReply(c, nil, err)
 		return
@@ -239,11 +328,37 @@ func SaveBelloBuddyPlan(c *gin.Context) {
 			return
 		}
 	}
-	var input service.BelloBuddyPlanInput
+	var input struct {
+		service.BelloBuddyPlanInput
+		ContentJSON *string `json:"content_json"`
+	}
 	if !belloReadBody(c, &input) {
 		return
 	}
-	plan, err := service.SaveBelloBuddyPlan(c.GetInt("id"), id, c.GetBool("bello_public_admin"), input)
+	if c.GetBool("bello_public_admin") {
+		if input.ContentJSON != nil {
+			if len(input.Content) != 0 && string(input.Content) != *input.ContentJSON {
+				belloReply(c, nil, &service.BelloBuddyError{Status: http.StatusBadRequest, Code: "INVALID_REQUEST", Message: "content 与 content_json 不一致"})
+				return
+			}
+			input.Content = common.RawMessage(*input.ContentJSON)
+		}
+		all := c.GetInt("role") == common.RoleRootUser
+		plan, err := service.SaveBelloBuddyAdminPlan(c.GetInt("id"), id, all, input.BelloBuddyPlanInput)
+		if err != nil {
+			belloReply(c, nil, err)
+			return
+		}
+		detail, err := service.GetBelloBuddyAdminPlan(model.DB, plan.ID, all)
+		belloReply(c, detail, err)
+		action := "bellobuddy.plan.update"
+		if id == 0 {
+			action = "bellobuddy.plan.create"
+		}
+		recordManageAuditFor(c, plan.OwnerID, action, map[string]any{"plan_id": plan.ID, "kind": plan.Kind, "visibility": plan.Visibility, "owner_id": plan.OwnerID, "version": plan.Version, "enabled": plan.Enabled, "filter_plan_id": plan.FilterPlanID})
+		return
+	}
+	plan, err := service.SaveBelloBuddyPlan(c.GetInt("id"), id, false, input.BelloBuddyPlanInput)
 	belloReply(c, plan, err)
 }
 
