@@ -22,7 +22,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 // System Configuration Defaults
 export const DEFAULT_SYSTEM_NAME = 'D Pin'
-export const DEFAULT_LOGO = '/logo.png'
+export const DEFAULT_LOGO = '/dpin-logo.png'
 
 // LocalStorage Keys
 export const STORAGE_KEYS = {

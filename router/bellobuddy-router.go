@@ -47,6 +47,7 @@ func registerBelloBuddyRoutes(apiRouter *gin.RouterGroup) {
 		c.Next()
 	})
 	admin.GET("/plans", middleware.RequirePermission(authz.BelloBuddyPlanRead), controller.ListBelloBuddyPlans)
+	registerBelloBuddyReleaseAdminRoutes(admin)
 	admin.GET("/plans/:id", middleware.RequirePermission(authz.BelloBuddyPlanRead), controller.GetBelloBuddyPlan)
 	admin.POST("/plans", middleware.RequirePermission(authz.BelloBuddyPlanWrite), controller.SaveBelloBuddyPlan)
 	admin.POST("/plans/import", middleware.RequirePermission(authz.BelloBuddyPlanWrite), controller.ImportBelloBuddyPlans)

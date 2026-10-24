@@ -382,6 +382,11 @@ func migrateDB() error {
 		&BelloBuddyJob{},
 		&BelloBuddyJobBinding{},
 		&BelloBuddyRelayIdentity{},
+		&BelloBuddyRelease{},
+		&BelloBuddyReleaseArtifact{},
+		&BelloBuddyReleaseUpload{},
+		&BelloBuddyReleaseChannel{},
+		&BelloBuddyReleaseOperation{},
 	}, BelloBuddyResumeModels()...)...)
 	if err != nil {
 		return err

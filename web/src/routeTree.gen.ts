@@ -35,6 +35,7 @@ import { Route as RankingsIndexRouteImport } from './routes/rankings/index'
 import { Route as SetupIndexRouteImport } from './routes/setup/index'
 import { Route as authUserResetRouteImport } from './routes/(auth)/user/reset'
 import { Route as AuthenticatedBellobuddyPlansIndexRouteImport } from './routes/_authenticated/bellobuddy-plans/index'
+import { Route as AuthenticatedBellobuddyReleasesIndexRouteImport } from './routes/_authenticated/bellobuddy-releases/index'
 import { Route as AuthenticatedBellobuddyIndexRouteImport } from './routes/_authenticated/bellobuddy/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
 import { Route as AuthenticatedChatChatIdRouteImport } from './routes/_authenticated/chat/$chatId'
@@ -203,6 +204,12 @@ const AuthenticatedBellobuddyPlansIndexRoute =
   AuthenticatedBellobuddyPlansIndexRouteImport.update({
     id: '/bellobuddy-plans/',
     path: '/bellobuddy-plans/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedBellobuddyReleasesIndexRoute =
+  AuthenticatedBellobuddyReleasesIndexRouteImport.update({
+    id: '/bellobuddy-releases/',
+    path: '/bellobuddy-releases/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedBellobuddyIndexRoute =
@@ -467,6 +474,7 @@ export interface FileRoutesByFullPath {
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/bellobuddy-plans/': typeof AuthenticatedBellobuddyPlansIndexRoute
+  '/bellobuddy-releases/': typeof AuthenticatedBellobuddyReleasesIndexRoute
   '/bellobuddy/': typeof AuthenticatedBellobuddyIndexRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
@@ -531,6 +539,7 @@ export interface FileRoutesByTo {
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/bellobuddy-plans': typeof AuthenticatedBellobuddyPlansIndexRoute
+  '/bellobuddy-releases': typeof AuthenticatedBellobuddyReleasesIndexRoute
   '/bellobuddy': typeof AuthenticatedBellobuddyIndexRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
@@ -599,6 +608,7 @@ export interface FileRoutesById {
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/_authenticated/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/_authenticated/bellobuddy-plans/': typeof AuthenticatedBellobuddyPlansIndexRoute
+  '/_authenticated/bellobuddy-releases/': typeof AuthenticatedBellobuddyReleasesIndexRoute
   '/_authenticated/bellobuddy/': typeof AuthenticatedBellobuddyIndexRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
@@ -666,6 +676,7 @@ export interface FileRouteTypes {
     | '/usage-logs/$section'
     | '/usage-logs/audit'
     | '/bellobuddy-plans/'
+    | '/bellobuddy-releases/'
     | '/bellobuddy/'
     | '/channels/'
     | '/dashboard/'
@@ -730,6 +741,7 @@ export interface FileRouteTypes {
     | '/usage-logs/$section'
     | '/usage-logs/audit'
     | '/bellobuddy-plans'
+    | '/bellobuddy-releases'
     | '/bellobuddy'
     | '/channels'
     | '/dashboard'
@@ -797,6 +809,7 @@ export interface FileRouteTypes {
     | '/_authenticated/usage-logs/$section'
     | '/_authenticated/usage-logs/audit'
     | '/_authenticated/bellobuddy-plans/'
+    | '/_authenticated/bellobuddy-releases/'
     | '/_authenticated/bellobuddy/'
     | '/_authenticated/channels/'
     | '/_authenticated/dashboard/'
@@ -1033,6 +1046,13 @@ declare module '@tanstack/react-router' {
       path: '/bellobuddy-plans'
       fullPath: '/bellobuddy-plans/'
       preLoaderRoute: typeof AuthenticatedBellobuddyPlansIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/bellobuddy-releases/': {
+      id: '/_authenticated/bellobuddy-releases/'
+      path: '/bellobuddy-releases'
+      fullPath: '/bellobuddy-releases/'
+      preLoaderRoute: typeof AuthenticatedBellobuddyReleasesIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/bellobuddy/': {
@@ -1410,6 +1430,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
   AuthenticatedUsageLogsAuditRoute: typeof AuthenticatedUsageLogsAuditRoute
   AuthenticatedBellobuddyPlansIndexRoute: typeof AuthenticatedBellobuddyPlansIndexRoute
+  AuthenticatedBellobuddyReleasesIndexRoute: typeof AuthenticatedBellobuddyReleasesIndexRoute
   AuthenticatedBellobuddyIndexRoute: typeof AuthenticatedBellobuddyIndexRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
@@ -1439,6 +1460,8 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedUsageLogsAuditRoute: AuthenticatedUsageLogsAuditRoute,
   AuthenticatedBellobuddyPlansIndexRoute:
     AuthenticatedBellobuddyPlansIndexRoute,
+  AuthenticatedBellobuddyReleasesIndexRoute:
+    AuthenticatedBellobuddyReleasesIndexRoute,
   AuthenticatedBellobuddyIndexRoute: AuthenticatedBellobuddyIndexRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,

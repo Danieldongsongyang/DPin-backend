@@ -13,6 +13,7 @@ import (
 )
 
 func SetRouter(router *gin.Engine, assets WebAssets) {
+	SetBelloBuddyReleaseRouter(router)
 	SetApiRouter(router)
 	SetDashboardRouter(router)
 	SetRelayRouter(router)
@@ -34,6 +35,10 @@ func SetRouter(router *gin.Engine, assets WebAssets) {
 			middleware.RouteTag("web"),
 			middleware.AccessTokenAudit(),
 			func(c *gin.Context) {
+				if strings.HasPrefix(c.Request.URL.Path, "/desktop-updates/") {
+					c.AbortWithStatus(http.StatusNotFound)
+					return
+				}
 				c.Redirect(http.StatusMovedPermanently, fmt.Sprintf("%s%s", frontendBaseUrl, c.Request.RequestURI))
 			},
 		)

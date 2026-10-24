@@ -21,6 +21,7 @@ import {
   Box,
   ClipboardList,
   CreditCard,
+  Download,
   FileText,
   FlaskConical,
   Key,
@@ -146,8 +147,29 @@ export function useSidebarData(): SidebarData {
             icon: Users,
             requiredRole: ROLE.ADMIN,
           },
-          ...(user && user.role >= ROLE.ADMIN && hasPermission(user, 'bellobuddy_plan', 'read')
-            ? [{ title: t('Plan management'), url: '/bellobuddy-plans', icon: ClipboardList, requiredRole: ROLE.ADMIN }]
+          ...(user &&
+          user.role >= ROLE.ADMIN &&
+          hasPermission(user, 'bellobuddy_plan', 'read')
+            ? [
+                {
+                  title: t('Plan management'),
+                  url: '/bellobuddy-plans',
+                  icon: ClipboardList,
+                  requiredRole: ROLE.ADMIN,
+                },
+              ]
+            : []),
+          ...(user &&
+          user.role >= ROLE.ADMIN &&
+          hasPermission(user, 'bellobuddy_release', 'read')
+            ? [
+                {
+                  title: t('BelloBuddy releases'),
+                  url: '/bellobuddy-releases',
+                  icon: Download,
+                  requiredRole: ROLE.ADMIN,
+                },
+              ]
             : []),
           {
             title: t('Models'),

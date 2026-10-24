@@ -23,14 +23,17 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
@@ -38,6 +41,121 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func TestAuthSessionRateLimitsPreserveLoginAndLogout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	require.NoError(t, i18n.Init())
+	for _, test := range []struct {
+		name    string
+		redis   bool
+		enabled bool
+		address string
+	}{
+		{name: "memory", enabled: true, address: "192.0.2.201:12345"},
+		{name: "redis", redis: true, enabled: true, address: "192.0.2.202:12345"},
+		{name: "memory disabled", address: "192.0.2.203:12345"},
+		{name: "redis disabled", redis: true, address: "192.0.2.204:12345"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			oldEnabled, oldNum, oldDuration := common.CriticalRateLimitEnable, common.CriticalRateLimitNum, common.CriticalRateLimitDuration
+			oldRedis, oldRDB, oldGlobal := common.RedisEnabled, common.RDB, common.GlobalApiRateLimitEnable
+			oldSecure, oldTrusted := common.SessionCookieSecure, common.SessionCookieTrustedURLs
+			oldPassword, oldTurnstile := common.PasswordLoginEnabled, common.TurnstileCheckEnabled
+			t.Cleanup(func() {
+				common.CriticalRateLimitEnable, common.CriticalRateLimitNum, common.CriticalRateLimitDuration = oldEnabled, oldNum, oldDuration
+				common.RedisEnabled, common.RDB, common.GlobalApiRateLimitEnable = oldRedis, oldRDB, oldGlobal
+				common.SessionCookieSecure, common.SessionCookieTrustedURLs = oldSecure, oldTrusted
+				common.PasswordLoginEnabled, common.TurnstileCheckEnabled = oldPassword, oldTurnstile
+			})
+			common.CriticalRateLimitEnable, common.CriticalRateLimitNum, common.CriticalRateLimitDuration = test.enabled, 2, 60
+			common.RedisEnabled, common.GlobalApiRateLimitEnable = test.redis, false
+			common.SessionCookieSecure, common.SessionCookieTrustedURLs = true, nil
+			common.PasswordLoginEnabled, common.TurnstileCheckEnabled = true, false
+			var redisServer *miniredis.Miniredis
+			if test.redis {
+				redisServer = miniredis.RunT(t)
+				client := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+				require.NoError(t, client.Ping(context.Background()).Err())
+				t.Cleanup(func() { _ = client.Close() })
+				common.RDB = client
+			}
+
+			engine := gin.New()
+			require.NoError(t, engine.SetTrustedProxies(nil))
+			SetApiRouter(engine)
+			request := func(path, origin string) *httptest.ResponseRecorder {
+				t.Helper()
+				req := httptest.NewRequest(http.MethodPost, "https://panel.example"+path, strings.NewReader(`{}`))
+				req.RemoteAddr = test.address
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Origin", origin)
+				response := httptest.NewRecorder()
+				engine.ServeHTTP(response, req)
+				return response
+			}
+
+			// Rejected origins cannot consume the session buckets, even when the
+			// limiter is disabled; the controller still validates session tokens.
+			for range 3 {
+				for _, path := range []string{"/api/user/auth/refresh", "/api/user/auth/logout"} {
+					response := request(path, "https://evil.example")
+					require.Equal(t, http.StatusForbidden, response.Code)
+					assert.Contains(t, response.Body.String(), `"code":"AUTH_ORIGIN_FORBIDDEN"`)
+				}
+			}
+			for range 2 {
+				response := request("/api/user/auth/refresh", "https://panel.example")
+				require.Equal(t, http.StatusUnauthorized, response.Code)
+				assert.Contains(t, response.Body.String(), `"success":false`)
+			}
+			if test.redis && test.enabled {
+				redisServer.FastForward(17 * time.Second)
+			}
+			response := request("/api/user/auth/refresh", "https://panel.example")
+			if test.enabled {
+				require.Equal(t, http.StatusTooManyRequests, response.Code)
+				wantRetry := "60"
+				if test.redis {
+					wantRetry = "43"
+				}
+				assert.Equal(t, wantRetry, response.Header().Get("Retry-After"))
+			} else {
+				require.Equal(t, http.StatusUnauthorized, response.Code)
+			}
+
+			// A saturated refresh bucket must allow logout and two interactive
+			// login attempts. Failed logins still consume the original CT budget.
+			for range 2 {
+				response = request("/api/user/auth/logout", "https://panel.example")
+				require.Equal(t, http.StatusOK, response.Code)
+				assert.JSONEq(t, `{"success":true,"message":""}`, response.Body.String())
+			}
+			response = request("/api/user/auth/logout", "https://panel.example")
+			if test.enabled {
+				require.Equal(t, http.StatusTooManyRequests, response.Code)
+				assert.Equal(t, "60", response.Header().Get("Retry-After"))
+			} else {
+				require.Equal(t, http.StatusOK, response.Code)
+			}
+			for range 2 {
+				response = request("/api/user/login", "https://panel.example")
+				require.Equal(t, http.StatusOK, response.Code)
+				assert.Contains(t, response.Body.String(), `"success":false`)
+			}
+			response = request("/api/user/login", "https://panel.example")
+			if test.enabled {
+				require.Equal(t, http.StatusTooManyRequests, response.Code)
+				assert.Equal(t, "60", response.Header().Get("Retry-After"))
+				// Changing login methods must not bypass the login limiter.
+				for _, path := range []string{"/api/user/login/2fa", "/api/user/login/verify", "/api/user/login/passkey/begin", "/api/user/login/passkey/finish", "/api/user/passkey/login/begin", "/api/user/passkey/login/finish"} {
+					assert.Equal(t, http.StatusTooManyRequests, request(path, "https://panel.example").Code, path)
+				}
+			} else {
+				require.Equal(t, http.StatusOK, response.Code)
+			}
+		})
+	}
+}
 
 // TEST_*_DSN 必须指向可销毁的独立测试库；测试结束删除本测试创建的表。
 func TestBelloBuddyConfiguration(t *testing.T) {
