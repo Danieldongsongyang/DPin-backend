@@ -41,20 +41,22 @@ type belloBuddyBuilderUpdateMetadata struct {
 }
 
 type belloBuddyBuildReleaseManifest struct {
-	SchemaVersion            int    `json:"schemaVersion"`
-	Version                  string `json:"version"`
-	AppID                    string `json:"appId"`
-	ProductName              string `json:"productName"`
-	Target                   string `json:"target"`
-	ElectronVersion          string `json:"electronVersion"`
-	BuiltAt                  string `json:"builtAt"`
-	Signing                  string `json:"signing"`
-	WindowsRuntimeVerified   *bool  `json:"windowsRuntimeVerified"`
-	InAppUpdaterIntegrated   *bool  `json:"inAppUpdaterIntegrated"`
-	ReleaseApproved          *bool  `json:"releaseApproved"`
-	BuildManifestSHA256      string `json:"buildManifestSha256"`
-	DependencyManifestSHA256 string `json:"dependencyManifestSha256"`
-	ElectronArchiveSHA256    string `json:"electronArchiveSha256"`
+	SchemaVersion            int                          `json:"schemaVersion"`
+	Version                  string                       `json:"version"`
+	AppID                    string                       `json:"appId"`
+	ProductName              string                       `json:"productName"`
+	Target                   string                       `json:"target"`
+	ElectronVersion          string                       `json:"electronVersion"`
+	BuiltAt                  string                       `json:"builtAt"`
+	Signing                  string                       `json:"signing"`
+	WindowsRuntimeVerified   *bool                        `json:"windowsRuntimeVerified"`
+	InAppUpdaterIntegrated   *bool                        `json:"inAppUpdaterIntegrated"`
+	ReleaseApproved          *bool                        `json:"releaseApproved"`
+	BuildManifestSHA256      string                       `json:"buildManifestSha256"`
+	DependencyManifestSHA256 string                       `json:"dependencyManifestSha256"`
+	ElectronArchiveSHA256    string                       `json:"electronArchiveSha256"`
+	UpdateKey                *belloBuddyUpdateKeyResource `json:"updateKey,omitempty"`
+	UpdateSignature          *belloBuddyUpdateSignature   `json:"updateSignature,omitempty"`
 	DpinConfig               struct {
 		APIOrigin string `json:"apiOrigin"`
 	} `json:"dpinConfig"`
@@ -81,7 +83,12 @@ func ValidateBelloBuddyReleaseFiles(root *os.Root, release *model.BelloBuddyRele
 	if root == nil || release == nil || release.ID <= 0 || release.Product != model.BelloBuddyReleaseProduct || release.Platform != model.BelloBuddyReleasePlatform || release.Arch != model.BelloBuddyReleaseArch {
 		return nil, errors.New("发布产品或 Windows 目标无效")
 	}
-	installerName := "BelloBuddy-Recovered-" + release.Version + "-win-x64.exe"
+	installerName := BelloBuddyReleaseFilename(release.Version, "installer")
+	for _, artifact := range artifacts {
+		if artifact.Kind == "installer" && belloBuddyReleaseArtifactFilenameMatches(release.Version, "installer", artifact.Filename) {
+			installerName = artifact.Filename
+		}
+	}
 	expected := map[string]string{"installer": installerName, "blockmap": installerName + ".blockmap", "metadata": "latest.yml", "manifest": "release-manifest.json"}
 	limits := map[string]int64{"installer": 2 << 30, "blockmap": 16 << 20, "metadata": 256 << 10, "manifest": 2 << 20}
 	if len(artifacts) != len(expected) || strings.ContainsAny(release.Version, "/\\\x00") || strings.TrimSpace(release.Version) != release.Version || release.Version == "" {
@@ -143,7 +150,7 @@ func ValidateBelloBuddyReleaseFiles(root *os.Root, release *model.BelloBuddyRele
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	report := map[string]any{
 		"passed": true, "checked_at": common.GetTimestamp(), "version": release.Version,
 		"installer_sha256": byKind["installer"].SHA256, "blockmap_blocks": blocks,
 		"checks": map[string]bool{"files_complete": true, "file_hashes": true, "metadata_matches_installer": true, "manifest_matches_files": true, "nsis_stub": true, "blockmap_checksums": true},
@@ -154,7 +161,12 @@ func ValidateBelloBuddyReleaseFiles(root *os.Root, release *model.BelloBuddyRele
 			"build_manifest_sha256": manifest.BuildManifestSHA256, "dependency_manifest_sha256": manifest.DependencyManifestSHA256,
 		},
 		"windows_acceptance_required": true,
-	}, nil
+	}
+	if manifest.Signing == "ed25519-update" {
+		report["dpin_update_signature"] = manifest.UpdateSignature
+		report["manifest"].(map[string]any)["update_key_id"] = manifest.UpdateKey.KeyID
+	}
+	return report, nil
 }
 
 func belloBuddyValidateNSISStub(file *os.File) error {
@@ -236,7 +248,11 @@ func belloBuddyValidateBuildReleaseManifest(file *os.File, release *model.BelloB
 	if err := common.Unmarshal(data, &manifest); err != nil {
 		return nil, errors.New("构建清单 JSON 无效")
 	}
-	if manifest.SchemaVersion != 1 || manifest.Version != release.Version || manifest.AppID != "local.bellobuddy.recovered" || manifest.ProductName != "BelloBuddy Recovered" || manifest.Target != "win32-x64" {
+	productName := "DPin"
+	if strings.HasPrefix(artifacts["installer"].Filename, "BelloBuddy-Recovered-") {
+		productName = "BelloBuddy Recovered"
+	}
+	if manifest.SchemaVersion != 1 || manifest.Version != release.Version || manifest.AppID != "local.bellobuddy.recovered" || manifest.ProductName != productName || manifest.Target != "win32-x64" {
 		return nil, errors.New("构建清单的应用标识、名称、版本或目标不匹配")
 	}
 	for _, fingerprint := range []string{manifest.BuildManifestSHA256, manifest.DependencyManifestSHA256, manifest.ElectronArchiveSHA256} {
@@ -245,8 +261,17 @@ func belloBuddyValidateBuildReleaseManifest(file *os.File, release *model.BelloB
 			return nil, errors.New("构建清单缺少有效的源码、依赖或 Electron 指纹")
 		}
 	}
-	if manifest.ElectronVersion == "" || manifest.WindowsRuntimeVerified == nil || manifest.InAppUpdaterIntegrated == nil || manifest.ReleaseApproved == nil || (manifest.Signing != "unsigned-internal" && manifest.Signing != "builder-signature-required") {
+	if manifest.ElectronVersion == "" || manifest.WindowsRuntimeVerified == nil || manifest.InAppUpdaterIntegrated == nil || manifest.ReleaseApproved == nil || (manifest.Signing != "unsigned-internal" && manifest.Signing != "builder-signature-required" && manifest.Signing != "ed25519-update") {
 		return nil, errors.New("构建清单缺少明确的签名和验收状态")
+	}
+	if manifest.Signing == "ed25519-update" {
+		resource, err := verifyBelloBuddyUpdateSignature(manifest.UpdateSignature, release.Version, artifacts["installer"])
+		if err != nil {
+			return nil, err
+		}
+		if manifest.UpdateKey == nil || *manifest.UpdateKey != resource {
+			return nil, errors.New("构建公钥资源与服务端固定的可信更新公钥不匹配")
+		}
 	}
 	origin, err := url.Parse(manifest.DpinConfig.APIOrigin)
 	if err != nil || (origin.Scheme != "https" && origin.Scheme != "http") || origin.Hostname() == "" || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || (origin.Path != "" && origin.Path != "/") {

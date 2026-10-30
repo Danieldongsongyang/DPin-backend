@@ -4,18 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"debug/macho"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -104,6 +101,9 @@ func LoadResumeArchiveConfig() (*ResumeArchiveConfig, error) {
 	if path == "" {
 		return nil, &FeishuArchiveFailure{Code: "ARCHIVE_DISABLED"}
 	}
+	if validateFeishuPath(path, false, true) != nil {
+		return nil, &FeishuArchiveFailure{Code: "ARCHIVE_CONFIG_INVALID"}
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, &FeishuArchiveFailure{Code: "ARCHIVE_CONFIG_INVALID"}
@@ -120,21 +120,16 @@ func LoadResumeArchiveConfig() (*ResumeArchiveConfig, error) {
 	if err := os.MkdirAll(config.DataDir, 0700); err != nil {
 		return nil, &FeishuArchiveFailure{Code: "ARCHIVE_DISK_ERROR"}
 	}
-	resolved, err := filepath.EvalSymlinks(config.DataDir)
-	if err != nil || filepath.Clean(resolved) != filepath.Clean(config.DataDir) {
+	if validateFeishuPath(config.DataDir, true, true) != nil {
 		return nil, &FeishuArchiveFailure{Code: "ARCHIVE_CONFIG_INVALID"}
 	}
-	info, err := os.Stat(config.DataDir)
-	if err != nil || info.Mode().Perm()&0077 != 0 {
-		return nil, &FeishuArchiveFailure{Code: "ARCHIVE_CONFIG_INVALID"}
-	}
-	for _, directory := range []string{"files", "inputs", "receipts", "downloads", "cli-home"} {
+	directories := append([]string{"files", "inputs", "receipts", "downloads", "cli-home", "cli-home/tmp"}, feishuPlatformDirectories()...)
+	for _, directory := range directories {
 		p := filepath.Join(config.DataDir, directory)
 		if err := os.MkdirAll(p, 0700); err != nil {
 			return nil, &FeishuArchiveFailure{Code: "ARCHIVE_DISK_ERROR"}
 		}
-		info, err := os.Lstat(p)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
+		if validateFeishuPath(p, true, true) != nil {
 			return nil, &FeishuArchiveFailure{Code: "ARCHIVE_CONFIG_INVALID"}
 		}
 	}
@@ -143,8 +138,7 @@ func LoadResumeArchiveConfig() (*ResumeArchiveConfig, error) {
 
 func (cli *FeishuArchiveCLI) ValidateBinary(ctx context.Context) error {
 	c := cli.Config
-	info, err := os.Lstat(c.CLIPath)
-	if err != nil || !filepath.IsAbs(c.CLIPath) || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || info.Mode().Perm()&0111 == 0 {
+	if validateFeishuPath(c.CLIPath, false, false) != nil {
 		return &FeishuArchiveFailure{Code: "CLI_PATH_INVALID"}
 	}
 	file, err := os.Open(c.CLIPath)
@@ -157,28 +151,58 @@ func (cli *FeishuArchiveCLI) ValidateBinary(ctx context.Context) error {
 	if err != nil || fmt.Sprintf("%x", hash.Sum(nil)) != c.CLISHA256 {
 		return &FeishuArchiveFailure{Code: "CLI_HASH_MISMATCH"}
 	}
-	if runtime.GOOS != "darwin" {
-		return &FeishuArchiveFailure{Code: "CLI_ARCH_UNSUPPORTED"}
-	}
-	bin, err := macho.Open(c.CLIPath)
-	if err != nil {
-		return &FeishuArchiveFailure{Code: "CLI_ARCH_MISMATCH"}
-	}
-	defer bin.Close()
-	wantCPU := macho.CpuArm64
-	if runtime.GOARCH == "amd64" {
-		wantCPU = macho.CpuAmd64
-	}
-	if bin.Cpu != wantCPU {
-		return &FeishuArchiveFailure{Code: "CLI_ARCH_MISMATCH"}
+	if err := validateFeishuExecutable(c.CLIPath); err != nil {
+		return err
 	}
 	command := exec.CommandContext(ctx, c.CLIPath, "--version")
-	command.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + filepath.Join(c.DataDir, "cli-home"), "LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1", "LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1"}
-	output, err := command.Output()
-	if err != nil || !slices.Contains(strings.Fields(string(output)), FeishuArchiveCLIVersion) {
+	command.Env = append(feishuCLIEnvironment(c), "LARKSUITE_CLI_REMOTE_META=off")
+	command.Dir = c.DataDir
+	output := &feishuLimitedBuffer{limit: 64 << 10}
+	command.Stdout = output
+	command.Stderr = &feishuLimitedBuffer{limit: 64 << 10}
+	command.WaitDelay = 2 * time.Second
+	if err := runFeishuCLI(command); err != nil || !slices.Contains(strings.Fields(output.String()), FeishuArchiveCLIVersion) {
 		return &FeishuArchiveFailure{Code: "CLI_VERSION_MISMATCH"}
 	}
 	return nil
+}
+
+// Private files and executable parents must not be redirected through links.
+// Platform checks use POSIX modes on macOS and the actual DACL on Windows.
+func validateFeishuPath(path string, directory, private bool) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || validateFeishuLocalPath(path) != nil {
+		return errors.New("invalid CLI filesystem path")
+	}
+	for current := path; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || feishuPathIsReparsePoint(current) {
+			return errors.New("invalid CLI filesystem object")
+		}
+		if current == path {
+			if (directory && !info.IsDir()) || (!directory && !info.Mode().IsRegular()) {
+				return errors.New("invalid CLI filesystem type")
+			}
+			if err := validateFeishuPermissions(current, info, private); err != nil {
+				return err
+			}
+		} else if current == filepath.Dir(path) {
+			if err := validateFeishuPermissions(current, info, private); err != nil {
+				return err
+			}
+		}
+		if filepath.Dir(current) == current {
+			break
+		}
+	}
+	return nil
+}
+
+func feishuCLIEnvironment(config ResumeArchiveConfig) []string {
+	home := filepath.Join(config.DataDir, "cli-home")
+	env := feishuPlatformEnvironment(home)
+	return append(env, "HOME="+home, "TZ=Asia/Shanghai", "LANG=en_US.UTF-8", "LARKSUITE_CLI_CONFIG_DIR="+home,
+		"LARKSUITE_CLI_BRAND=feishu", "LARKSUITE_CLI_DEFAULT_AS=bot", "LARKSUITE_CLI_STRICT_MODE=bot",
+		"LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1", "LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1")
 }
 
 type feishuLimitedBuffer struct {
@@ -200,8 +224,7 @@ func (cli *FeishuArchiveCLI) call(ctx context.Context, command, table string, ar
 	if err := cli.ValidateBinary(ctx); err != nil {
 		return nil, err
 	}
-	info, err := os.Lstat(cli.Config.SecretFile)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+	if validateFeishuPath(cli.Config.SecretFile, false, true) != nil {
 		return nil, &FeishuArchiveFailure{Code: "CLI_CREDENTIAL_INVALID"}
 	}
 	secretData, err := os.ReadFile(cli.Config.SecretFile)
@@ -231,19 +254,12 @@ func (cli *FeishuArchiveCLI) call(ctx context.Context, command, table string, ar
 	}
 	process := exec.CommandContext(ctx, cli.Config.CLIPath, argv...)
 	process.Dir = cli.Config.DataDir
-	process.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + filepath.Join(cli.Config.DataDir, "cli-home"), "TZ=Asia/Shanghai", "LANG=en_US.UTF-8", "LARKSUITE_CLI_CONFIG_DIR=" + filepath.Join(cli.Config.DataDir, "cli-home"), "LARKSUITE_CLI_APP_ID=" + cli.Config.AppID, "LARKSUITE_CLI_APP_SECRET=" + credentials.AppSecret, "LARKSUITE_CLI_BRAND=feishu", "LARKSUITE_CLI_DEFAULT_AS=bot", "LARKSUITE_CLI_STRICT_MODE=bot", "LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1", "LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1"}
-	process.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	process.Cancel = func() error {
-		if process.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-process.Process.Pid, syscall.SIGKILL)
-	}
+	process.Env = append(feishuCLIEnvironment(cli.Config), "LARKSUITE_CLI_APP_ID="+cli.Config.AppID, "LARKSUITE_CLI_APP_SECRET="+credentials.AppSecret)
 	process.WaitDelay = 2 * time.Second
 	out := &feishuLimitedBuffer{limit: 8 << 20}
 	stderr := &feishuLimitedBuffer{limit: 64 << 10}
 	process.Stdout, process.Stderr = out, stderr
-	err = process.Run()
+	err = runFeishuCLI(process)
 	var envelope struct {
 		OK       bool           `json:"ok"`
 		Identity string         `json:"identity"`
@@ -411,6 +427,22 @@ func (cli *FeishuArchiveCLI) Get(ctx context.Context, table, id string) (*Feishu
 	}
 	return &records[0], nil
 }
+func (cli *FeishuArchiveCLI) GetFields(ctx context.Context, table, id string, fields []string) (*FeishuArchiveRecord, error) {
+	args := []string{"--record-id", id}
+	for _, field := range fields {
+		args = append(args, "--field-id", field)
+	}
+	data, err := cli.call(ctx, "+record-get", table, args, nil)
+	if err != nil {
+		return nil, err
+	}
+	records, err := decodeFeishuRecords(data)
+	if err != nil || len(records) != 1 || records[0].ID != id {
+		return nil, &FeishuArchiveFailure{Code: "FEISHU_RECORD_MISSING"}
+	}
+	return &records[0], nil
+}
+
 func (cli *FeishuArchiveCLI) Search(ctx context.Context, table, field, value string) ([]FeishuArchiveRecord, error) {
 	filter := map[string]any{"logic": "and", "conditions": [][]any{{field, "==", value}}}
 	args := []string{"--limit", "2"}

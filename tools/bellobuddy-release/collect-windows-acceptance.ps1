@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$MinimumSystemVersion,
     [Parameter(Mandatory = $true)][string]$ChecksFile,
-    [Parameter(Mandatory = $true)][string]$ExpectedPublisher
+    [string]$ExpectedPublisher = '',
+    [string]$UpdateSignatureKeyId = ''
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -21,11 +22,17 @@ if ($installerItem.PSIsContainer -or ($installerItem.Attributes -band [IO.FileAt
 $installerLock = [IO.File]::Open($installerItem.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
 try {
     $signature = Get-AuthenticodeSignature -LiteralPath $installerItem.FullName
-    if ($signature.Status.ToString() -ne 'Valid' -or $null -eq $signature.SignerCertificate) {
-        throw 'Installer Authenticode signature is not Valid.'
-    }
-    if ($signature.SignerCertificate.Subject -cne $ExpectedPublisher) {
-        throw 'Installer signer certificate subject does not match the configured publisher.'
+    if ($UpdateSignatureKeyId) {
+        if ($UpdateSignatureKeyId -cnotmatch '^[0-9a-f]{64}$') {
+            throw 'Update signature key identifier must be a SHA256 fingerprint.'
+        }
+    } else {
+        if ($signature.Status.ToString() -ne 'Valid' -or $null -eq $signature.SignerCertificate) {
+            throw 'Installer Authenticode signature is not Valid.'
+        }
+        if (-not $ExpectedPublisher -or $signature.SignerCertificate.Subject -cne $ExpectedPublisher) {
+            throw 'Installer signer certificate subject does not match the configured publisher.'
+        }
     }
     $versionInfo = $installerItem.VersionInfo
     if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
@@ -43,6 +50,9 @@ try {
     $hash = (Get-FileHash -LiteralPath $installerItem.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($manual.version -cne $Version -or $manual.installer_sha256 -cne $hash) {
         throw 'Manual acceptance evidence must name this exact version and installer SHA256.'
+    }
+    if ($UpdateSignatureKeyId -and $manual.update_signature_key_id -cne $UpdateSignatureKeyId) {
+        throw 'Manual acceptance evidence must bind the trusted update signature key identifier.'
     }
     $verifiedAt = 0L
     if (-not [long]::TryParse([string]$manual.verified_at, [ref]$verifiedAt) -or
@@ -76,10 +86,11 @@ try {
         verified_at = $verifiedAt
         windows_version = $windowsVersion
         minimum_system_version = $MinimumSystemVersion
+        update_signature_key_id = $UpdateSignatureKeyId
         authenticode = [ordered]@{
             status = $signature.Status.ToString()
-            publisher = $signature.SignerCertificate.Subject
-            certificate_thumbprint = $signature.SignerCertificate.Thumbprint
+            publisher = $(if ($null -ne $signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '' })
+            certificate_thumbprint = $(if ($null -ne $signature.SignerCertificate) { $signature.SignerCertificate.Thumbprint } else { '' })
         }
         checks = $checks
         check_evidence = $checkEvidence

@@ -18,6 +18,55 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDeepSeekFlashBuiltinBilling(t *testing.T) {
+	settings := config.GlobalConfig.Get("billing_setting").(*billing_setting.BillingSetting)
+	saved := *settings
+	savedRatios, savedPrices := ratio_setting.ModelRatio2JSONString(), ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() {
+		*settings = saved
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices))
+	})
+	for _, name := range []string{"deepseek-flash", "deepseek-v4-flash"} {
+		t.Run(name, func(t *testing.T) {
+			*settings = billing_setting.BillingSetting{BillingMode: map[string]string{}, BillingExpr: map[string]string{}}
+			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
+			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
+			assert.Equal(t, billing_setting.BillingModeTieredExpr, billing_setting.GetBillingMode(name))
+			expression, ok := billing_setting.GetBillingExpr(name)
+			require.True(t, ok)
+			for _, tc := range []struct {
+				name                         string
+				input, output, cached, quota int
+			}{
+				{"uncached", 1000, 100, 0, 210},
+				{"cached input excluded from base input", 1000, 100, 300, 166},
+				{"all cache", 1000, 0, 1000, 3},
+				{"long context uses same published rates", 1000000, 1000, 900000, 18300},
+				{"actual zero usage stays zero", 0, 0, 0, 0},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					usage := &dto.Usage{PromptTokens: tc.input, CompletionTokens: tc.output, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: tc.cached}}
+					result, err := billingexpr.ComputeTieredQuota(&billingexpr.BillingSnapshot{ExprString: expression, ExprHash: billingexpr.ExprHashString(expression), GroupRatio: 1, QuotaPerUnit: 500000}, service.BuildTieredTokenParams(usage, false, billingexpr.UsedVars(expression)))
+					require.NoError(t, err)
+					assert.Equal(t, tc.quota, result.ActualQuotaAfterGroup)
+				})
+			}
+			custom, err := common.Marshal(map[string]float64{name: 0})
+			require.NoError(t, err)
+			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(custom)))
+			assert.Equal(t, billing_setting.BillingModeRatio, billing_setting.GetBillingMode(name), "preserve an explicitly free legacy price")
+			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
+			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(string(custom)))
+			assert.Equal(t, billing_setting.BillingModeRatio, billing_setting.GetBillingMode(name))
+			settings.BillingMode[name], settings.BillingExpr[name] = billing_setting.BillingModeTieredExpr, `tier("custom", p * 7)`
+			actual, ok := billing_setting.GetBillingExpr(name)
+			require.True(t, ok)
+			assert.Equal(t, settings.BillingExpr[name], actual)
+		})
+	}
+}
+
 func TestGPT6AstraBuiltinBilling(t *testing.T) {
 	settings := config.GlobalConfig.Get("billing_setting").(*billing_setting.BillingSetting)
 	saved := *settings

@@ -31,6 +31,7 @@ import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { BelloBuddyPlans } from '..'
+import { installPlanEditorBridge } from '../editor-bridge'
 import type { PlanMetadata } from '../types'
 
 const plan: PlanMetadata = {
@@ -48,6 +49,63 @@ const plan: PlanMetadata = {
   updated_at: 2,
 }
 const raw = '{"scheme_name":"Sales","disabled":false,"opaque":9007199254740993}'
+test('screening guidance optimization uses the current editable frame without saving a plan', async () => {
+  const target = { postMessage: vi.fn() } as unknown as Window
+  const post = vi.spyOn(api, 'post').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        guidance: '必须条件：京东运营经验',
+        changes: [],
+        questions: [],
+      },
+    },
+  })
+  const put = vi.spyOn(api, 'put')
+  const options = {
+    frame: target,
+    plan: { ...plan, kind: 'filter' as const },
+    canEdit: true,
+    isCurrentIdentity: () => true,
+    onDirty: vi.fn(),
+    onBack: vi.fn(),
+    onSaved: vi.fn(),
+  }
+  const dispose = installPlanEditorBridge(options)
+  const dispatch = () =>
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: target,
+        data: {
+          protocol: 'bellobuddy:filter-editor:v1',
+          type: 'request',
+          id: 'optimize-1',
+          operation: 'optimize-guidance',
+          payload: { guidance: '京东运营经验', mode: 'level' },
+        },
+      })
+    )
+  dispatch()
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
+  expect(post).toHaveBeenCalledWith(
+    '/api/bellobuddy/ai/guidance/optimize',
+    { schema_version: 1, guidance: '京东运营经验', mode: 'level' },
+    expect.objectContaining({ signal: expect.any(AbortSignal) })
+  )
+  expect(put).not.toHaveBeenCalled()
+  dispose()
+  post.mockClear()
+  const readonly = installPlanEditorBridge({ ...options, canEdit: false })
+  dispatch()
+  await waitFor(() =>
+    expect(target.postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ok: false }),
+      '*'
+    )
+  )
+  expect(post).not.toHaveBeenCalled()
+  readonly()
+})
 let client: QueryClient
 
 beforeEach(() => {

@@ -8,12 +8,15 @@ import (
 )
 
 func registerBelloBuddyRoutes(apiRouter *gin.RouterGroup) {
+	apiRouter.GET("/bellobuddy/typing/:operation", controller.BelloBuddyTypingPublic)
+	apiRouter.POST("/bellobuddy/typing/:operation", controller.BelloBuddyTypingPublic)
 	routes := apiRouter.Group("/bellobuddy")
 	routes.Use(middleware.DisableCache(), middleware.UserAuth(), middleware.BelloBuddySessionRequired())
 	routes.GET("/capabilities", controller.GetBelloBuddyCapabilities)
 	routes.GET("/plans", controller.ListBelloBuddyPlans)
 	routes.GET("/plans/:id", controller.GetBelloBuddyPlan)
 	routes.POST("/plans", controller.SaveBelloBuddyPlan)
+	routes.POST("/plans/:id/copy", controller.CopyBelloBuddyPlan)
 	routes.PUT("/plans/:id", controller.SaveBelloBuddyPlan)
 	routes.POST("/accounts/:accountKey/jobs/sync", controller.SyncBelloBuddyJobs)
 	routes.GET("/accounts/:accountKey/jobs/config", controller.GetBelloBuddyJobs)
@@ -34,6 +37,7 @@ func registerBelloBuddyRoutes(apiRouter *gin.RouterGroup) {
 
 	ai := routes.Group("/ai")
 	ai.Use(middleware.RouteTag("relay"), middleware.BodyStorageCleanup(), controller.BelloBuddyAIResponse(), middleware.SystemPerformanceCheck())
+	ai.POST("/guidance/optimize", middleware.PrepareBelloBuddyGuidance(), middleware.TokenAuth(), middleware.ModelRequestRateLimit(), middleware.BelloBuddyAIChannelAccess(), middleware.Distribute(), middleware.BelloBuddyAISelectedChannel(), controller.RelayBelloBuddyAI)
 	for _, operation := range []struct {
 		path  string
 		reply bool

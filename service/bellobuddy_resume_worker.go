@@ -76,7 +76,7 @@ func (engine *BelloBuddyResumeEngine) write(ctx context.Context, task *model.Bel
 		return nil, err
 	}
 	path := filepath.Join(engine.Config.DataDir, "receipts", attempt.ID+".json")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	file, err := createFeishuPrivateFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -91,13 +91,7 @@ func (engine *BelloBuddyResumeEngine) write(ctx context.Context, task *model.Bel
 	if err != nil {
 		return nil, err
 	}
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return nil, err
-	}
-	err = dir.Sync()
-	dir.Close()
-	if err != nil {
+	if err := syncFeishuCreatedFile(path); err != nil {
 		return nil, err
 	}
 	if err := engine.guardLease(ctx, task.ID); err != nil {
@@ -248,6 +242,9 @@ func (engine *BelloBuddyResumeEngine) process(ctx context.Context, task *model.B
 	}
 	_, _, user, err := engine.ownership(scope.UserID, account.AccountKey, job.JobID)
 	if err != nil {
+		return err
+	}
+	if err := RequireBelloBuddyTyping(job.ID, scope.ScopeKey); err != nil {
 		return err
 	}
 	var predecessors int64

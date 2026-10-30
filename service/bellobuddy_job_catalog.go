@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -272,7 +271,7 @@ func (engine *BelloBuddyResumeEngine) writeJobCatalog(ctx context.Context, task 
 	}
 	receipt, _ := common.Marshal(map[string]any{"operation": operation, "confirmed": true, "record_id": resumeCreatedRecordID(data)})
 	filename := filepath.Join(engine.Config.DataDir, "receipts", attempt.ID+".json")
-	file, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	file, err := createFeishuPrivateFile(filename)
 	if err != nil {
 		return err
 	}
@@ -287,13 +286,7 @@ func (engine *BelloBuddyResumeEngine) writeJobCatalog(ctx context.Context, task 
 	if err != nil {
 		return err
 	}
-	dir, err := os.Open(filepath.Dir(filename))
-	if err != nil {
-		return err
-	}
-	err = dir.Sync()
-	dir.Close()
-	if err != nil {
+	if err := syncFeishuCreatedFile(filename); err != nil {
 		return err
 	}
 	if err := engine.guardJobLease(ctx, task.ID); err != nil {

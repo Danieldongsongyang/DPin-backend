@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -143,14 +142,14 @@ func (engine *BelloBuddyResumeEngine) Accept(ctx context.Context, userID int, ac
 		}
 		used += info.Size()
 	}
-	var disk syscall.Statfs_t
-	if syscall.Statfs(engine.Config.DataDir, &disk) != nil || int64(disk.Bavail)*int64(disk.Bsize) < BelloBuddyResumeMaxBytes+(16<<20) {
+	available, diskErr := availableDiskBytes(engine.Config.DataDir)
+	if diskErr != nil || available < uint64(BelloBuddyResumeMaxBytes+(16<<20)) {
 		return nil, &BelloBuddyError{507, "ARCHIVE_DISK_FULL", "服务器磁盘可用空间不足，文件未接收"}
 	}
 	archiveID := uuid.NewString()
 	storageName := archiveID + ".pdf"
 	path := filepath.Join(engine.Config.DataDir, "files", storageName)
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	file, err := createFeishuPrivateFile(path)
 	if err != nil {
 		return nil, &BelloBuddyError{507, "ARCHIVE_DISK_ERROR", "简历暂存写入失败，文件未接收"}
 	}
@@ -187,13 +186,7 @@ func (engine *BelloBuddyResumeEngine) Accept(ctx context.Context, userID int, ac
 			return nil, belloInvalid("PDF 包含不支持的主动内容或内嵌文件")
 		}
 	}
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return nil, err
-	}
-	err = directory.Sync()
-	directory.Close()
-	if err != nil {
+	if err := syncFeishuCreatedFile(path); err != nil {
 		return nil, err
 	}
 	sha := fmt.Sprintf("%x", hash.Sum(nil))

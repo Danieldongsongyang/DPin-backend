@@ -22,6 +22,14 @@ func abortBelloBuddyAI(c *gin.Context, err error) {
 }
 
 func PrepareBelloBuddyAI(reply bool) gin.HandlerFunc {
+	return prepareBelloBuddyAI(reply, false)
+}
+
+func PrepareBelloBuddyGuidance() gin.HandlerFunc {
+	return prepareBelloBuddyAI(false, true)
+}
+
+func prepareBelloBuddyAI(reply, guidance bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		identity, ok := GetSessionAuthIdentity(c)
 		header := strings.Fields(c.GetHeader("Authorization"))
@@ -45,6 +53,13 @@ func PrepareBelloBuddyAI(reply bool) gin.HandlerFunc {
 			return
 		}
 		for field := range fields {
+			if guidance {
+				if field != "schema_version" && field != "guidance" && field != "mode" {
+					abortBelloBuddyAI(c, &service.BelloBuddyError{Status: http.StatusBadRequest, Code: "INVALID_REQUEST", Message: "优化请求包含不支持的字段"})
+					return
+				}
+				continue
+			}
 			switch field {
 			case "account_key", "job_id", "job_version", "schema_version", "candidate_id", "filter_plan_id", "filter_version", "binding_version", "snapshot_ref", "communication_plan_id", "communication_version", "request", "input", "conversation_ref":
 			default:
@@ -57,13 +72,26 @@ func PrepareBelloBuddyAI(reply bool) gin.HandlerFunc {
 			abortBelloBuddyAI(c, &service.BelloBuddyError{Status: http.StatusBadRequest, Code: "INVALID_REQUEST", Message: "AI 请求 JSON 无效"})
 			return
 		}
-		route, err := service.ResolveBelloBuddyAIRoute(identity, input, reply)
-		if err != nil {
-			abortBelloBuddyAI(c, err)
-			return
-		}
+		var route *service.BelloBuddyAIRoute
 		var payload []byte
 		path, channelType := "/v1/systemone", constant.ChannelTypeTypeSafe
+		if guidance {
+			var request service.BelloBuddyGuidanceInput
+			if common.UnmarshalBodyReusable(c, &request) != nil {
+				abortBelloBuddyAI(c, &service.BelloBuddyError{Status: http.StatusBadRequest, Code: "INVALID_REQUEST", Message: "优化请求格式无效"})
+				return
+			}
+			var modelName string
+			payload, modelName, err = service.BuildBelloBuddyGuidanceRequest(request)
+			route = &service.BelloBuddyAIRoute{Model: modelName}
+			path, channelType = "/v1/chat/completions", constant.ChannelTypeDeepSeek
+		} else {
+			route, err = service.ResolveBelloBuddyAIRoute(identity, input, reply)
+			if err != nil {
+				abortBelloBuddyAI(c, err)
+				return
+			}
+		}
 		if reply {
 			if strings.TrimSpace(input.Input) == "" || len(input.Input) > 512<<10 || len(input.Request) != 0 {
 				abortBelloBuddyAI(c, &service.BelloBuddyError{Status: http.StatusBadRequest, Code: "INVALID_REQUEST", Message: "回复请求必须包含一轮文本输入"})
@@ -91,7 +119,7 @@ func PrepareBelloBuddyAI(reply bool) gin.HandlerFunc {
 			}
 			payload, err = common.Marshal(gin.H{"model": route.Model, "messages": []gin.H{{"role": "user", "content": input.Input}}, "stream": false})
 			path, channelType = "/v1/chat/completions", constant.ChannelTypeMaxKB
-		} else {
+		} else if !guidance {
 			if input.Input != "" || input.ConversationRef != "" {
 				abortBelloBuddyAI(c, &service.BelloBuddyError{Status: http.StatusBadRequest, Code: "INVALID_REQUEST", Message: "筛选请求必须使用 JEV 结构化协议"})
 				return
@@ -130,7 +158,9 @@ func PrepareBelloBuddyAI(reply bool) gin.HandlerFunc {
 		c.Set("bello_relay_internal", true)
 		c.Set("bello_relay_token_id", token.Id)
 		c.Set("bello_ai_route", route)
+		c.Set("bello_typing_ai_input", input)
 		c.Set("bello_ai_reply", reply)
+		c.Set("bello_ai_guidance", guidance)
 		service.GetChannelConstraints(c).AddFilter(dto.ChannelFilter{Kind: dto.FilterChannelType, ChannelType: channelType})
 		if route.ChannelID > 0 {
 			service.GetChannelConstraints(c).AddPin(dto.ChannelPin{ChannelId: route.ChannelID, Source: dto.PinSourceBelloBuddy, Rank: -10, RetryMode: dto.PinRetrySingleAttempt})

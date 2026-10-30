@@ -488,6 +488,72 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			var chat service.BelloBuddyPlanDetail
 			require.NoError(t, common.Unmarshal(request(http.MethodPost, "/plans", tokens[0], communication, http.StatusOK), &chat))
 			request(http.MethodPost, "/admin/plans", tokens[2], communication, http.StatusNotFound)
+			t.Run("公有方案复制为本人私有并独立修改", func(t *testing.T) {
+				// ASVS v5.0.0-8.2.1/8.2.2/8.3.1：复制和保存均由服务端约束对象及归属。
+				adminFilter := filter
+				adminFilter.ExpectedVersion = 0
+				var sourceFilter service.BelloBuddyPlanDetail
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/plans", tokens[2], adminFilter, http.StatusOK), &sourceFilter))
+				assert.Equal(t, "public", sourceFilter.Visibility)
+				assert.Zero(t, sourceFilter.OwnerID)
+				adminChat := communication
+				adminChat.FilterPlanID = sourceFilter.ID
+				var sourceChat service.BelloBuddyPlanDetail
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, "/plans", tokens[2], adminChat, http.StatusOK), &sourceChat))
+				assert.Equal(t, "public", sourceChat.Visibility)
+				copyPath := fmt.Sprintf("/plans/%d/copy", sourceChat.ID)
+				request(http.MethodPost, copyPath, patRaw, map[string]any{"expected_version": sourceChat.Version}, http.StatusForbidden)
+				request(http.MethodPost, copyPath, tokens[1], map[string]any{"expected_version": 0}, http.StatusBadRequest)
+				request(http.MethodPost, copyPath, tokens[1], map[string]any{"expected_version": sourceChat.Version + 1}, http.StatusConflict)
+				var copied service.BelloBuddyPlanDetail
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, copyPath, tokens[1], map[string]any{"expected_version": sourceChat.Version, "owner_id": users[0].Id, "visibility": "public"}, http.StatusOK), &copied))
+				assert.Equal(t, "private", copied.Visibility)
+				assert.Equal(t, users[1].Id, copied.OwnerID)
+				assert.NotEqual(t, sourceChat.ID, copied.ID)
+				assert.NotEqual(t, sourceFilter.ID, copied.FilterPlanID)
+				var copiedFilter model.BelloBuddyPlan
+				require.NoError(t, db.First(&copiedFilter, copied.FilterPlanID).Error)
+				assert.Equal(t, "private", copiedFilter.Visibility)
+				assert.Equal(t, users[1].Id, copiedFilter.OwnerID)
+				assert.Contains(t, copiedFilter.Content, "9007199254740993")
+				assert.Contains(t, string(copied.Content), `"keep":false`)
+				request(http.MethodGet, fmt.Sprintf("/plans/%d", copied.ID), tokens[0], nil, http.StatusNotFound)
+				request(http.MethodPost, fmt.Sprintf("/plans/%d/copy", copied.ID), tokens[0], map[string]any{"expected_version": copied.Version}, http.StatusNotFound)
+				update := service.BelloBuddyPlanInput{Kind: copied.Kind, Name: copied.Name, Enabled: &enabled, SchemaVersion: copied.SchemaVersion, ExpectedVersion: copied.Version, FilterPlanID: copied.FilterPlanID, Content: common.RawMessage(strings.Replace(string(copied.Content), `"keep":false`, `"keep":true`, 1))}
+				request(http.MethodPut, fmt.Sprintf("/plans/%d", copied.ID), tokens[1], update, http.StatusOK)
+				var unchanged model.BelloBuddyPlan
+				require.NoError(t, db.First(&unchanged, sourceChat.ID).Error)
+				assert.Equal(t, string(sourceChat.Content), unchanged.Content)
+				assert.Equal(t, sourceChat.Version, unchanged.Version)
+				var solo service.BelloBuddyPlanDetail
+				require.NoError(t, common.Unmarshal(request(http.MethodPost, fmt.Sprintf("/plans/%d/copy", sourceFilter.ID), tokens[2], map[string]any{"expected_version": sourceFilter.Version}, http.StatusOK), &solo))
+				assert.Equal(t, "private", solo.Visibility, "管理员复制操作也始终创建自己的私有副本")
+				assert.Equal(t, users[2].Id, solo.OwnerID)
+				request(http.MethodPost, fmt.Sprintf("/plans/%d/copy", private.ID), tokens[0], map[string]any{"expected_version": private.Version}, http.StatusNotFound)
+				ownedFilter, err := service.SaveBelloBuddyPlan(users[2].Id, 0, false, adminFilter)
+				require.NoError(t, err)
+				adminChat.FilterPlanID = ownedFilter.ID
+				ownedChat, err := service.SaveBelloBuddyPlan(users[2].Id, 0, false, adminChat)
+				require.NoError(t, err)
+				assert.Error(t, service.PublishBelloBuddyOwnedPlan(users[0].Id, ownedChat.ID, ownedChat.Version))
+				assert.ErrorIs(t, service.PublishBelloBuddyOwnedPlan(users[2].Id, ownedChat.ID, ownedChat.Version+1), service.ErrBelloBuddyConflict)
+				require.NoError(t, service.PublishBelloBuddyOwnedPlan(users[2].Id, ownedChat.ID, ownedChat.Version))
+				for _, id := range []int{ownedFilter.ID, ownedChat.ID} {
+					var published model.BelloBuddyPlan
+					require.NoError(t, db.First(&published, id).Error)
+					assert.Equal(t, "public", published.Visibility)
+					assert.Zero(t, published.OwnerID)
+					assert.EqualValues(t, 2, published.Version)
+				}
+				require.NoError(t, db.Model(&model.BelloBuddyPlan{}).Where("id = ?", sourceFilter.ID).Update("enabled", false).Error)
+				var beforeCount, afterCount int64
+				require.NoError(t, db.Model(&model.BelloBuddyPlan{}).Count(&beforeCount).Error)
+				request(http.MethodPost, copyPath, tokens[1], map[string]any{"expected_version": sourceChat.Version}, http.StatusNotFound)
+				require.NoError(t, db.Model(&model.BelloBuddyPlan{}).Count(&afterCount).Error)
+				assert.Equal(t, beforeCount, afterCount, "关联无效时不留半份副本")
+				// 子测试创建的公有方案不进入后续既有列表断言。
+				require.NoError(t, db.Model(&model.BelloBuddyPlan{}).Where("id IN ?", []int{sourceFilter.ID, sourceChat.ID, ownedFilter.ID, ownedChat.ID}).Update("enabled", false).Error)
+			})
 			t.Run("管理员全部方案与归属关联", func(t *testing.T) {
 				// v5.0.0-8.2.1/8.2.2/8.2.3/8.3.1：功能、对象、归属字段均在服务端验证。
 				ownerInput := service.BelloBuddyPlanInput{Kind: "filter", Name: "__admin_plan_owner", Enabled: &enabled, SchemaVersion: 1,
@@ -1498,6 +1564,9 @@ func runBelloBuddyAIBridge(t *testing.T, db *gorm.DB, engine *gin.Engine, users 
 	assert.NotContains(t, logs[3].Content, "上游没有返回计费信息")
 	t.Run("固定运行快照与续期", func(t *testing.T) {
 		runBelloBuddyRuntimeSnapshot(t, db, engine, users, sessions, filter, communication, binding, reply, received)
+	})
+	t.Run("筛选指引优化", func(t *testing.T) {
+		runBelloBuddyGuidanceOptimization(t, db, engine, sessions[0])
 	})
 	// 删除/禁用后关联保留，重新登录不能自动生成替代凭据。
 	require.NoError(t, db.Model(internal).Update("status", common.TokenStatusDisabled).Error)

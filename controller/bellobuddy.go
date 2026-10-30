@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
 )
 
@@ -110,6 +111,9 @@ func ListBelloBuddyPlans(c *gin.Context) {
 		return
 	}
 	query := model.BelloBuddyVisiblePlans(model.DB, c.GetInt("id"))
+	if c.GetInt("role") >= common.RoleAdminUser && authz.Can(c.GetInt("id"), c.GetInt("role"), authz.BelloBuddyPlanRead) {
+		query = model.DB.Model(&model.BelloBuddyPlan{}).Where("visibility = ? OR (visibility = ? AND owner_id = ?)", "public", "private", c.GetInt("id"))
+	}
 	if c.GetBool("bello_public_admin") {
 		listBelloBuddyAdminPlans(c, kind, page, pageSize)
 		return
@@ -311,6 +315,21 @@ func GetBelloBuddyPlan(c *gin.Context) {
 		}
 		return
 	}
+	if c.GetInt("role") >= common.RoleAdminUser && authz.Can(c.GetInt("id"), c.GetInt("role"), authz.BelloBuddyPlanRead) {
+		plan, err := service.GetBelloBuddyAdminPlan(model.DB, id, false)
+		if err == nil {
+			belloReply(c, struct {
+				*service.BelloBuddyAdminPlanDetail
+				AdminMode bool `json:"admin_mode"`
+				CanEdit   bool `json:"can_edit"`
+			}{plan, true, authz.Can(c.GetInt("id"), c.GetInt("role"), authz.BelloBuddyPlanWrite)}, nil)
+			return
+		}
+		if err != service.ErrBelloBuddyNotFound {
+			belloReply(c, nil, err)
+			return
+		}
+	}
 	plan, err := service.GetBelloBuddyPlan(model.DB, c.GetInt("id"), id, "", false)
 	if err != nil {
 		belloReply(c, nil, err)
@@ -358,7 +377,39 @@ func SaveBelloBuddyPlan(c *gin.Context) {
 		recordManageAuditFor(c, plan.OwnerID, action, map[string]any{"plan_id": plan.ID, "kind": plan.Kind, "visibility": plan.Visibility, "owner_id": plan.OwnerID, "version": plan.Version, "enabled": plan.Enabled, "filter_plan_id": plan.FilterPlanID})
 		return
 	}
-	plan, err := service.SaveBelloBuddyPlan(c.GetInt("id"), id, false, input.BelloBuddyPlanInput)
+	public := c.GetInt("role") >= common.RoleAdminUser && authz.Can(c.GetInt("id"), c.GetInt("role"), authz.BelloBuddyPlanWrite)
+	if public && id != 0 {
+		_, err := service.GetBelloBuddyAdminPlan(model.DB, id, false)
+		if err == service.ErrBelloBuddyNotFound {
+			public = false
+		} else if err != nil {
+			belloReply(c, nil, err)
+			return
+		}
+	}
+	plan, err := service.SaveBelloBuddyPlan(c.GetInt("id"), id, public, input.BelloBuddyPlanInput)
+	belloReply(c, plan, err)
+	if err == nil && public {
+		action := "bellobuddy.plan.update"
+		if id == 0 {
+			action = "bellobuddy.plan.create"
+		}
+		recordManageAuditFor(c, plan.OwnerID, action, map[string]any{"plan_id": plan.ID, "kind": plan.Kind, "visibility": plan.Visibility, "owner_id": plan.OwnerID, "version": plan.Version, "enabled": plan.Enabled, "filter_plan_id": plan.FilterPlanID})
+	}
+}
+
+func CopyBelloBuddyPlan(c *gin.Context) {
+	id, ok := belloPlanID(c)
+	if !ok {
+		return
+	}
+	var input struct {
+		ExpectedVersion int64 `json:"expected_version"`
+	}
+	if !belloReadBody(c, &input) {
+		return
+	}
+	plan, err := service.CopyBelloBuddyPlan(c.GetInt("id"), id, input.ExpectedVersion)
 	belloReply(c, plan, err)
 }
 

@@ -36,6 +36,7 @@ type belloBuddyReleaseAcceptancePayload struct {
 	VerifiedAt           int64  `json:"verified_at"`
 	WindowsVersion       string `json:"windows_version"`
 	MinimumSystemVersion string `json:"minimum_system_version"`
+	UpdateSignatureKeyID string `json:"update_signature_key_id,omitempty"`
 	Authenticode         struct {
 		Status                string `json:"status"`
 		Publisher             string `json:"publisher"`
@@ -48,8 +49,12 @@ type belloBuddyReleaseAcceptancePayload struct {
 // VerifyBelloBuddyReleaseEvidence 校验受信任验收环境的签名及制品绑定。
 // 签名说明指定验收者确认过 Windows 结果，并不表示 D-PIN 自己运行过安装器。
 func VerifyBelloBuddyReleaseEvidence(evidence BelloBuddyReleaseEvidence, releaseVersion, installerSHA256, minimumSystemVersion string) (map[string]any, error) {
+	return verifyBelloBuddyReleaseEvidence(evidence, releaseVersion, installerSHA256, minimumSystemVersion, "", "")
+}
+
+func verifyBelloBuddyReleaseEvidence(evidence BelloBuddyReleaseEvidence, releaseVersion, installerSHA256, minimumSystemVersion, signing, updateKeyID string) (map[string]any, error) {
 	publisher := strings.TrimSpace(os.Getenv("BELLOBUDDY_RELEASE_PUBLISHER"))
-	if publisher == "" || len(publisher) > 2048 {
+	if signing != "ed25519-update" && (publisher == "" || len(publisher) > 2048) {
 		return nil, errors.New("未配置可信 Windows 发布者 BELLOBUDDY_RELEASE_PUBLISHER")
 	}
 	key, err := belloBuddyReleaseVerifierKey()
@@ -105,9 +110,19 @@ func VerifyBelloBuddyReleaseEvidence(evidence BelloBuddyReleaseEvidence, release
 	if report.VerifiedAt < now-int64(90*24*time.Hour/time.Second) || report.VerifiedAt > now+int64(5*time.Minute/time.Second) {
 		return nil, errors.New("Windows 验收报告已超过 90 天或验收时间在未来")
 	}
-	thumbprint, err := hex.DecodeString(report.Authenticode.CertificateThumbprint)
-	if report.Authenticode.Status != "Valid" || report.Authenticode.Publisher != publisher || err != nil || len(thumbprint) != sha256.Size && len(thumbprint) != 20 {
-		return nil, errors.New("Windows 代码签名的有效状态、发布者或证书指纹不匹配")
+	if signing == "ed25519-update" {
+		resource, _, err := belloBuddyReleaseUpdateKey()
+		if err != nil {
+			return nil, err
+		}
+		if updateKeyID != resource.KeyID || report.UpdateSignatureKeyID != resource.KeyID {
+			return nil, errors.New("Windows 验收报告未绑定当前可信更新签名公钥")
+		}
+	} else {
+		thumbprint, err := hex.DecodeString(report.Authenticode.CertificateThumbprint)
+		if report.Authenticode.Status != "Valid" || report.Authenticode.Publisher != publisher || err != nil || len(thumbprint) != sha256.Size && len(thumbprint) != 20 {
+			return nil, errors.New("Windows 代码签名的有效状态、发布者或证书指纹不匹配")
+		}
 	}
 	for _, check := range []string{"installation", "launch", "native_tools", "data_preserved"} {
 		if !report.Checks[check] {

@@ -7,6 +7,12 @@ var builtinBillingExpr = map[string]string{
 	"jev-latest":  `tier("standard", p * 0.042)`,
 	"jev-preview": `tier("standard", p * 0.042)`,
 	"jev-1.13.0":  `tier("standard", p * 0.042)`,
+	// https://api-docs.deepseek.com/quick_start/pricing/ (2026-10-29).
+	// Standard gateway defaults use the published peak USD/M rates. Provider
+	// off-peak/holiday discounts are not inferred; explicit admin prices win.
+	// The legacy v4-flash name is served and priced as deepseek-flash upstream.
+	"deepseek-flash":    `tier("standard_peak", p * 0.3 + cr * 0.006 + c * 1.2)`,
+	"deepseek-v4-flash": `tier("standard_peak", p * 0.3 + cr * 0.006 + c * 1.2)`,
 	// https://developers.openai.com/api/docs/pricing (Standard, 2026-09-09).
 	// The Images API reports image output in output_tokens, normalized to c.
 	"gpt-image-2":            `tier("standard", p * 5 + cr * 1.25 + img * 8 + img_cr * 2 + c * 30)`,

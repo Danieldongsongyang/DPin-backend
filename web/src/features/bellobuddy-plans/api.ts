@@ -184,6 +184,27 @@ export async function savePlan(
   return saved
 }
 
+export async function optimizeFilterGuidance(
+  payload: Record<string, unknown>,
+  signal: AbortSignal
+): Promise<unknown> {
+  if (
+    typeof payload.guidance !== 'string' ||
+    !payload.guidance.trim() ||
+    new TextEncoder().encode(payload.guidance).length > 24 * 1024 ||
+    typeof payload.mode !== 'string' ||
+    !['level', 'filter'].includes(payload.mode)
+  ) {
+    throw invalidEditorRequest()
+  }
+  const response = await api.post<Response<unknown>>(
+    '/api/bellobuddy/ai/guidance/optimize',
+    { schema_version: 1, guidance: payload.guidance, mode: payload.mode },
+    { signal, timeout: 85000, skipAuthRefresh: true, skipErrorHandler: true }
+  )
+  return requireServerSuccess(response.data).data
+}
+
 export async function listFilterCandidates(
   planID: number,
   signal: AbortSignal

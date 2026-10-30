@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -302,11 +304,19 @@ func TestBelloBuddyResumeArchiveDatabaseMatrix(t *testing.T) {
 						duplicate.ArchiveID = "F1_TEST_CONSTRAINT"
 						require.Error(t, db.Create(&duplicate).Error)
 						files := filepath.Join(config.DataDir, "files")
-						require.NoError(t, os.Chmod(files, 0500))
+						if runtime.GOOS == "windows" {
+							require.NoError(t, exec.Command("icacls.exe", files, "/deny", "*S-1-1-0:(WD,AD)").Run())
+						} else {
+							require.NoError(t, os.Chmod(files, 0500))
+						}
 						denied := input
 						denied.ClientUploadID = "F1_TEST_DISK_PERMISSION"
 						_, permissionErr := engine.Accept(context.Background(), 1, "account-A", "job-A", "same.pdf", denied, bytes.NewReader(pdf))
-						require.NoError(t, os.Chmod(files, 0700))
+						if runtime.GOOS == "windows" {
+							require.NoError(t, exec.Command("icacls.exe", files, "/remove:d", "*S-1-1-0").Run())
+						} else {
+							require.NoError(t, os.Chmod(files, 0700))
+						}
 						require.Error(t, permissionErr)
 						assert.Equal(t, "ARCHIVE_DISK_ERROR", resumeFailureCode(permissionErr))
 						filler := filepath.Join(files, "F1_TEST_CAPACITY.bin")

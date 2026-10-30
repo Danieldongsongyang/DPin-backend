@@ -10,6 +10,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -314,6 +316,165 @@ func GetBelloBuddyPlan(db *gorm.DB, userID, planID int, kind string, enabled boo
 
 func SaveBelloBuddyPlan(userID, planID int, public bool, input BelloBuddyPlanInput) (*BelloBuddyPlanDetail, error) {
 	return saveBelloBuddyPlan(userID, planID, public, false, input)
+}
+
+// 公有沟通方案与其筛选关联在同一事务复制，目标归属只取自已验证的产品会话。
+func CopyBelloBuddyPlan(userID, planID int, expectedVersion int64) (*BelloBuddyPlanDetail, error) {
+	if userID <= 0 || planID <= 0 || expectedVersion <= 0 {
+		return nil, belloInvalid("复制需要有效的方案和版本，请重新打开方案")
+	}
+	var copied *model.BelloBuddyPlan
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var source model.BelloBuddyPlan
+		if err := tx.Where("id = ? AND visibility = ? AND enabled = ?", planID, "public", true).First(&source).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrBelloBuddyNotFound
+			}
+			return err
+		}
+		if source.Version != expectedVersion {
+			return ErrBelloBuddyConflict
+		}
+		var filter *model.BelloBuddyPlan
+		if source.FilterPlanID != 0 {
+			var original model.BelloBuddyPlan
+			if err := tx.Where("id = ? AND kind = ? AND visibility = ? AND enabled = ?", source.FilterPlanID, "filter", "public", true).First(&original).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrBelloBuddyNotFound
+				}
+				return err
+			}
+			if err := validateBelloBuddyFilterReference(common.RawMessage(source.Content), &original); err != nil {
+				return err
+			}
+			var err error
+			filter, err = privateBelloBuddyPlanCopy(tx, userID, &original, nil)
+			if err != nil {
+				return err
+			}
+		}
+		var err error
+		copied, err = privateBelloBuddyPlanCopy(tx, userID, &source, filter)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &BelloBuddyPlanDetail{BelloBuddyPlan: *copied, Content: common.RawMessage(copied.Content)}, nil
+}
+
+// 将管理员本人明确选择的旧私有方案转为公有，保留编号与岗位引用。
+func PublishBelloBuddyOwnedPlan(userID, planID int, expectedVersion int64) error {
+	var actor model.User
+	if err := model.DB.Select("id", "role", "status").First(&actor, userID).Error; err != nil {
+		return err
+	}
+	if actor.Status != common.UserStatusEnabled || actor.Role < common.RoleAdminUser || !authz.Can(actor.Id, actor.Role, authz.BelloBuddyPlanWrite) {
+		return &BelloBuddyError{http.StatusForbidden, "PERMISSION_DENIED", "需要公有方案管理权限"}
+	}
+	if planID <= 0 || expectedVersion <= 0 {
+		return belloInvalid("请选择待公开方案的当前版本")
+	}
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		var plan model.BelloBuddyPlan
+		if err := tx.Where("id = ? AND visibility = ? AND owner_id = ?", planID, "private", userID).First(&plan).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrBelloBuddyNotFound
+			}
+			return err
+		}
+		if plan.Version != expectedVersion {
+			return ErrBelloBuddyConflict
+		}
+		if plan.FilterPlanID != 0 {
+			var filter model.BelloBuddyPlan
+			if err := BelloBuddyPlanFilterScope(tx.Model(&model.BelloBuddyPlan{}), &plan).Where("bello_buddy_plans.id = ?", plan.FilterPlanID).First(&filter).Error; err != nil {
+				return ErrBelloBuddyNotFound
+			}
+			if err := validateBelloBuddyFilterReference(common.RawMessage(plan.Content), &filter); err != nil {
+				return err
+			}
+			if filter.Visibility == "private" {
+				if err := publishBelloBuddyPlan(tx, &filter); err != nil {
+					return err
+				}
+			}
+		}
+		return publishBelloBuddyPlan(tx, &plan)
+	})
+}
+
+func publishBelloBuddyPlan(tx *gorm.DB, plan *model.BelloBuddyPlan) error {
+	input := BelloBuddyPlanInput{Kind: plan.Kind, Name: plan.Name, Enabled: &plan.Enabled, SchemaVersion: plan.SchemaVersion, FilterPlanID: plan.FilterPlanID, Content: common.RawMessage(plan.Content)}
+	if err := ValidateBelloBuddyPlan(input); err != nil {
+		return err
+	}
+	var fields map[string]common.RawMessage
+	if err := common.UnmarshalJsonStr(plan.Content, &fields); err != nil {
+		return err
+	}
+	fields["visibility"] = common.RawMessage(`"public"`)
+	content, err := common.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	if len(content) > BelloBuddyMaxPlanBytes {
+		return belloInvalid("方案公开后的正文超过大小限制")
+	}
+	result := tx.Model(&model.BelloBuddyPlan{}).Where("id = ? AND owner_id = ? AND visibility = ? AND version = ?", plan.ID, plan.OwnerID, "private", plan.Version).
+		Updates(map[string]any{"visibility": "public", "owner_id": 0, "version": plan.Version + 1, "content": string(content), "updated_at": common.GetTimestamp()})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrBelloBuddyConflict
+	}
+	return nil
+}
+
+func privateBelloBuddyPlanCopy(tx *gorm.DB, userID int, source, filter *model.BelloBuddyPlan) (*model.BelloBuddyPlan, error) {
+	var fields map[string]common.RawMessage
+	if err := common.UnmarshalJsonStr(source.Content, &fields); err != nil || fields == nil {
+		return nil, belloInvalid("原方案正文无效，无法复制")
+	}
+	prefix := []rune(strings.TrimSpace(source.Name))
+	name := string(prefix[:min(124, len(prefix))]) + "（副本）"
+	nameKey := "name"
+	if source.Kind == "communication" {
+		nameKey = "scheme_name"
+	}
+	for key, value := range map[string]any{"id": uuid.NewString(), nameKey: name, "visibility": "private", "builtin": false, "version": 1} {
+		encoded, err := common.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		fields[key] = encoded
+	}
+	filterID := 0
+	if filter != nil {
+		var reference, copiedFilter map[string]common.RawMessage
+		if common.Unmarshal(fields["filter_def"], &reference) != nil || common.UnmarshalJsonStr(filter.Content, &copiedFilter) != nil || reference == nil {
+			return nil, belloInvalid("沟通方案的筛选引用无效，无法复制")
+		}
+		reference["id"] = copiedFilter["id"]
+		encoded, err := common.Marshal(reference)
+		if err != nil {
+			return nil, err
+		}
+		fields["filter_def"] = encoded
+		filterID = filter.ID
+	}
+	content, err := common.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	input := BelloBuddyPlanInput{Kind: source.Kind, Name: name, Enabled: &source.Enabled, SchemaVersion: source.SchemaVersion, FilterPlanID: filterID, Content: content}
+	if err := ValidateBelloBuddyPlan(input); err != nil {
+		return nil, err
+	}
+	now := common.GetTimestamp()
+	copy := &model.BelloBuddyPlan{Kind: source.Kind, Name: name, Visibility: "private", OwnerID: userID, Enabled: source.Enabled, Content: string(content), SchemaVersion: source.SchemaVersion, Version: 1, FilterPlanID: filterID, CreatedAt: now, UpdatedAt: now}
+	return copy, tx.Create(copy).Error
 }
 
 func saveBelloBuddyPlan(userID, planID int, administrator, all bool, input BelloBuddyPlanInput) (*BelloBuddyPlanDetail, error) {

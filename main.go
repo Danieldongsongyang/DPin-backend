@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -158,6 +159,7 @@ func main() {
 	controller.RegisterScheduledSystemTasks()
 	service.StartSystemTaskRunner()
 	service.StartBelloBuddyResumeArchive()
+	service.StartBelloBuddyTyping()
 
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
 		common.BatchUpdateEnabled = true
@@ -213,7 +215,7 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:    ":" + port,
+		Addr:    net.JoinHostPort(os.Getenv("LISTEN_HOST"), port),
 		Handler: server,
 	}
 

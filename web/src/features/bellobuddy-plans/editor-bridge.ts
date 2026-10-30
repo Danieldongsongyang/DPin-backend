@@ -30,6 +30,7 @@ import {
   listFilterCandidates,
   positivePlanID,
   savePlan,
+  optimizeFilterGuidance,
 } from './api'
 import type { PlanDetail, PlanMetadata } from './types'
 
@@ -82,6 +83,12 @@ export function installPlanEditorBridge(options: BridgeOptions): () => void {
       return {}
     }
     if (operation === 'back') return {}
+    if (operation === 'optimize-guidance') {
+      if (!options.canEdit || currentPlan.kind !== 'filter') {
+        throw invalidEditorRequest()
+      }
+      return optimizeFilterGuidance(payload, controller.signal)
+    }
     if (operation === 'list') return [currentPlan]
     if (operation === 'detail') {
       if (payload.id !== currentPlan.id) throw invalidEditorRequest()

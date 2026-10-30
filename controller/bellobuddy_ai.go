@@ -116,10 +116,33 @@ func BelloBuddyAIResponse() gin.HandlerFunc {
 			if source == "upstream" {
 				status = http.StatusBadGateway
 			}
-			c.JSON(status, gin.H{"success": false, "code": code, "message": "AI 调用未成功，请根据错误来源检查服务或权限", "source": source, "request_id": requestID, "retryable": false})
+			message := "AI 调用未成功，请根据错误来源检查服务或权限"
+			if code == "AI_PRICE_NOT_CONFIGURED" {
+				message = "AI 模型尚未配置计费价格，请在 DPin 的“分组与模型定价设置”中配置该模型价格后重试"
+			}
+			c.JSON(status, gin.H{"success": false, "code": code, "message": message, "source": source, "request_id": requestID, "retryable": false})
 			return
 		}
 		var result common.RawMessage = buffer.body.Bytes()
+		if c.GetBool("bello_ai_guidance") {
+			var response dto.TextResponse
+			if common.Unmarshal(result, &response) != nil || len(response.Choices) != 1 || response.Choices[0].FinishReason != "stop" {
+				belloReply(c, nil, &service.BelloBuddyError{Status: http.StatusBadGateway, Code: "AI_GUIDANCE_RESPONSE_INVALID", Message: "AI 优化结果不完整，原文已保留，请重试"})
+				return
+			}
+			text, ok := response.Choices[0].Message.Content.(string)
+			if !ok {
+				belloReply(c, nil, &service.BelloBuddyError{Status: http.StatusBadGateway, Code: "AI_GUIDANCE_RESPONSE_INVALID", Message: "AI 优化结果格式无效，原文已保留，请重试"})
+				return
+			}
+			suggestion, err := service.ParseBelloBuddyGuidanceResult(text)
+			if err != nil {
+				belloReply(c, nil, err)
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"success": true, "data": suggestion, "request_id": requestID})
+			return
+		}
 		if !c.GetBool("bello_ai_reply") {
 			if common.GetJsonType(result) != "object" {
 				belloReply(c, nil, service.ErrBelloBuddyConfig)
@@ -139,8 +162,18 @@ func BelloBuddyAIResponse() gin.HandlerFunc {
 			belloReply(c, nil, err)
 			return
 		}
+		replyText := response.Choices[0].Message.Content
+		if input, ok := common.GetContextKeyType[service.BelloBuddyAIInput](c, "bello_typing_ai_input"); ok {
+			if text, isText := replyText.(string); isText {
+				if decorated, err := service.AddBelloBuddyTypingInvitation(route.Scope, input, text); err == nil {
+					replyText = decorated
+				} else {
+					common.SysError("typing: invitation could not be prepared; original answer preserved")
+				}
+			}
+		}
 		data := gin.H{
-			"text": response.Choices[0].Message.Content, "model": route.Model, "usage": response.Usage,
+			"text": replyText, "model": route.Model, "usage": response.Usage,
 			"conversation_ref": reference, "binding_version": route.Scope.BindingVersion,
 		}
 		if protocol := c.GetString(maxkb.ContextReplyProtocol); protocol != "" {
@@ -152,7 +185,7 @@ func BelloBuddyAIResponse() gin.HandlerFunc {
 
 func RelayBelloBuddyAI(c *gin.Context) {
 	format := types.RelayFormat(types.RelayFormatTypeSafe)
-	if c.GetBool("bello_ai_reply") {
+	if c.GetBool("bello_ai_reply") || c.GetBool("bello_ai_guidance") {
 		format = types.RelayFormatOpenAI
 	}
 	Relay(c, format)

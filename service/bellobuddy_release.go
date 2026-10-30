@@ -118,7 +118,7 @@ func BelloBuddyReleaseUploadLimit(kind string) int64 {
 }
 
 func BelloBuddyReleaseFilename(version, kind string) string {
-	installer := "BelloBuddy-Recovered-" + version + "-win-x64.exe"
+	installer := "DPin-" + version + "-win-x64.exe"
 	switch kind {
 	case "installer":
 		return installer
@@ -133,6 +133,17 @@ func BelloBuddyReleaseFilename(version, kind string) string {
 	}
 }
 
+func belloBuddyReleaseArtifactFilenameMatches(version, kind, filename string) bool {
+	expected := BelloBuddyReleaseFilename(version, kind)
+	if expected == "" {
+		return false
+	}
+	if filename == expected {
+		return true
+	}
+	return (kind == "installer" || kind == "blockmap") && filename == "BelloBuddy-Recovered-"+strings.TrimPrefix(expected, "DPin-")
+}
+
 // Upload bodies are streamed into a unique private file. The index replacement
 // and release revision commit together; a failed transaction leaves only an
 // unreferenced immutable file, never a changed current channel.
@@ -144,7 +155,7 @@ func StoreBelloBuddyReleaseArtifact(db *gorm.DB, actorID, id int, revision int64
 	if release.State != model.BelloBuddyReleaseDraft || release.Revision != revision || release.Disabled {
 		return nil, model.ErrBelloBuddyReleaseConflict
 	}
-	if expected := BelloBuddyReleaseFilename(release.Version, kind); expected == "" || filename != expected {
+	if !belloBuddyReleaseArtifactFilenameMatches(release.Version, kind, filename) {
 		return nil, errors.New("文件种类或名称与当前版本不一致")
 	}
 	storage, err := OpenBelloBuddyReleaseStorage()
@@ -162,7 +173,7 @@ func StoreBelloBuddyReleaseArtifact(db *gorm.DB, actorID, id int, revision int64
 	defer func() {
 		if !completed {
 			// A panic, short body or failed commit cannot be recorded as complete.
-			db.Model(&model.BelloBuddyReleaseUpload{}).Where("id = ?", upload.ID).Updates(map[string]any{"state": "failed", "code": "UPLOAD_FAILED", "bytes_received": received, "updated_at": common.GetTimestamp()})
+			db.Model(&model.BelloBuddyReleaseUpload{}).Where("id = ?", upload.ID).Updates(map[string]any{"state": "failed", "error_code": "UPLOAD_FAILED", "bytes_received": received, "updated_at": common.GetTimestamp()})
 		}
 	}()
 	if err = storage.MkdirAll("staging", 0700); err != nil {
@@ -211,7 +222,7 @@ func StoreBelloBuddyReleaseArtifact(db *gorm.DB, actorID, id int, revision int64
 		if err := tx.Create(&artifact).Error; err != nil {
 			return err
 		}
-		return tx.Model(&model.BelloBuddyReleaseUpload{}).Where("id = ?", upload.ID).Updates(map[string]any{"state": "complete", "code": "", "bytes_received": received, "updated_at": common.GetTimestamp()}).Error
+		return tx.Model(&model.BelloBuddyReleaseUpload{}).Where("id = ?", upload.ID).Updates(map[string]any{"state": "complete", "error_code": "", "bytes_received": received, "updated_at": common.GetTimestamp()}).Error
 	})
 	completed = err == nil
 	return updated, err
@@ -304,7 +315,16 @@ func AcceptBelloBuddyRelease(db *gorm.DB, id int, revision int64, evidence Bello
 		if err := tx.Where("release_id = ? AND kind = ?", id, "installer").First(&artifact).Error; err != nil {
 			return err
 		}
-		report, err := VerifyBelloBuddyReleaseEvidence(evidence, release.Version, artifact.SHA256, release.MinimumSystemVersion)
+		var validation belloBuddyVerifiedReleaseReport
+		if common.UnmarshalJsonStr(release.ValidationReport, &validation) != nil || !validation.Passed {
+			return errors.New("缺少通过的发布文件校验结果")
+		}
+		if validation.Manifest.Signing == "ed25519-update" {
+			if _, err := verifyBelloBuddyUpdateSignature(validation.UpdateSignature, release.Version, artifact); err != nil {
+				return err
+			}
+		}
+		report, err := verifyBelloBuddyReleaseEvidence(evidence, release.Version, artifact.SHA256, release.MinimumSystemVersion, validation.Manifest.Signing, validation.Manifest.UpdateKeyID)
 		if err != nil {
 			return err
 		}
@@ -344,8 +364,9 @@ func ApplyBelloBuddyReleaseOperation(db *gorm.DB, input model.BelloBuddyReleaseO
 		// Builder assertions are additional gates; cryptographically authenticated
 		// Windows acceptance remains mandatory and is rechecked at publication.
 		manifest, _ := report["manifest"].(map[string]any)
-		if !slices.Contains([]string{"signed", "builder-signature-required"}, fmt.Sprint(manifest["signing"])) || manifest["in_app_updater_integrated"] != true {
-			return errors.New("正式发布需要已签名且集成更新器的构建；当前版本仅可内部验收")
+		signing := fmt.Sprint(manifest["signing"])
+		if !slices.Contains([]string{"signed", "builder-signature-required", "ed25519-update"}, signing) || manifest["in_app_updater_integrated"] != true {
+			return errors.New("正式发布需要可信更新签名并集成更新器；当前版本仅可内部验收")
 		}
 		var saved struct {
 			Evidence BelloBuddyReleaseEvidence `json:"evidence"`
@@ -355,7 +376,7 @@ func ApplyBelloBuddyReleaseOperation(db *gorm.DB, input model.BelloBuddyReleaseO
 		}
 		for _, artifact := range artifacts {
 			if artifact.Kind == "installer" {
-				_, err = VerifyBelloBuddyReleaseEvidence(saved.Evidence, release.Version, artifact.SHA256, release.MinimumSystemVersion)
+				_, err = verifyBelloBuddyReleaseEvidence(saved.Evidence, release.Version, artifact.SHA256, release.MinimumSystemVersion, signing, fmt.Sprint(manifest["update_key_id"]))
 				return err
 			}
 		}
@@ -395,10 +416,13 @@ func CheckBelloBuddyReleaseAccess(release *model.BelloBuddyRelease, internal boo
 }
 
 func BelloBuddyReleaseArtifactByName(db *gorm.DB, filename string) (*model.BelloBuddyRelease, *model.BelloBuddyReleaseArtifact, error) {
-	if !strings.HasPrefix(filename, "BelloBuddy-Recovered-") || (!strings.HasSuffix(filename, "-win-x64.exe") && !strings.HasSuffix(filename, "-win-x64.exe.blockmap")) {
+	version, found := strings.CutPrefix(filename, "DPin-")
+	if !found {
+		version, found = strings.CutPrefix(filename, "BelloBuddy-Recovered-")
+	}
+	if !found || (!strings.HasSuffix(filename, "-win-x64.exe") && !strings.HasSuffix(filename, "-win-x64.exe.blockmap")) {
 		return nil, nil, gorm.ErrRecordNotFound
 	}
-	version := strings.TrimPrefix(filename, "BelloBuddy-Recovered-")
 	version = strings.TrimSuffix(strings.TrimSuffix(version, ".blockmap"), "-win-x64.exe")
 	if !belloBuddyReleaseValidSemver(version) {
 		return nil, nil, gorm.ErrRecordNotFound
@@ -418,6 +442,25 @@ func BelloBuddyReleaseFeed(release *model.BelloBuddyRelease, artifact *model.Bel
 	quote := func(value string) string { encoded, _ := common.Marshal(value); return string(encoded) }
 	url := "/desktop-updates/bellobuddy/artifacts/win32/x64/" + artifact.Filename
 	text := fmt.Sprintf("version: %s\nfiles:\n  - url: %s\n    sha512: %s\n    size: %d\npath: %s\nsha512: %s\nminimumSystemVersion: %s\nreleaseName: %s\nreleaseNotes: %s\n", quote(release.Version), quote(url), artifact.SHA512, artifact.Size, quote(url), artifact.SHA512, quote(release.MinimumSystemVersion), quote(release.Title), quote(release.Notes))
+	if release.ValidationReport != "" {
+		var validation belloBuddyVerifiedReleaseReport
+		if common.UnmarshalJsonStr(release.ValidationReport, &validation) != nil {
+			return nil, errors.New("版本文件校验记录无效")
+		}
+		if validation.Manifest.Signing == "ed25519-update" {
+			if !validation.Passed || validation.UpdateSignature == nil || validation.UpdateSignature.KeyID != validation.Manifest.UpdateKeyID {
+				return nil, errors.New("版本缺少已验证的更新签名")
+			}
+			if _, err := verifyBelloBuddyUpdateSignature(validation.UpdateSignature, release.Version, *artifact); err != nil {
+				return nil, err
+			}
+			encoded, err := common.Marshal(validation.UpdateSignature)
+			if err != nil {
+				return nil, err
+			}
+			text += "dpinUpdateSignature: " + string(encoded) + "\n"
+		}
+	}
 	return []byte(text), nil
 }
 
