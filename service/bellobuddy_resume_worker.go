@@ -276,6 +276,11 @@ func (engine *BelloBuddyResumeEngine) process(ctx context.Context, task *model.B
 		}
 	}
 	jobFields := map[string]any{target.Fields["job_name"]: job.Name, target.Fields["hr"]: user.Username}
+	if mapping.RecordID == "" && mapping.AttemptID == "" {
+		if _, err := engine.reuseJobMapping(ctx, &account, &job, user, &mapping, nil); err != nil {
+			return err
+		}
+	}
 	if mapping.RecordID == "" {
 		if mapping.AttemptID != "" {
 			receipt, err := engine.readReceipt(mapping.AttemptID)
@@ -284,7 +289,24 @@ func (engine *BelloBuddyResumeEngine) process(ctx context.Context, task *model.B
 			}
 			mapping.RecordID = resumeCreatedRecordID(receipt)
 		} else {
-			receipt, err := engine.write(ctx, task, "job_create", &mapping, func() (map[string]any, error) { return engine.Backend.Write(ctx, target.JobTable, "", jobFields) })
+			createFields := map[string]any{target.Fields["job_name"]: job.Name, target.Fields["hr"]: user.Username}
+			if engine.Config.JobSync.Enabled {
+				for key, value := range map[string]string{"account": account.DisplayName, "account_id": jobPlatformAccountIdentity(user.Id, &account), "platform": "BOSS直聘", "job_id": job.JobID} {
+					field := engine.Config.JobSync.Fields[key]
+					if !strings.HasPrefix(field, "fld") {
+						return resumeUnknown("JOB_SYNC_CONFIG_INVALID")
+					}
+					schema, err := engine.Backend.Field(ctx, target.JobTable, field)
+					if err != nil {
+						return err
+					}
+					if schema.Type != "text" {
+						return resumeUnknown("FEISHU_SCHEMA_CHANGED")
+					}
+					createFields[field] = value
+				}
+			}
+			receipt, err := engine.write(ctx, task, "job_create", &mapping, func() (map[string]any, error) { return engine.Backend.Write(ctx, target.JobTable, "", createFields) })
 			if err != nil {
 				return err
 			}

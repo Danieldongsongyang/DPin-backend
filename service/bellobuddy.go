@@ -149,7 +149,7 @@ func ValidateBelloBuddyPlan(input BelloBuddyPlanInput) error {
 	}
 	booleanFields := []string{"disabled", "builtin"}
 	if input.Kind == "filter" {
-		booleanFields = append(booleanFields, "enable_quick_screening", "enable_ai_screening")
+		booleanFields = append(booleanFields, "enable_quick_screening", "enable_ai_screening", "enable_typing_assessment")
 	} else {
 		booleanFields = append(booleanFields, "skip_delivered_toggle", "conditions_as_match", "direct_inquiry_as_match", "auto_greeting_enabled", "auto_initiate_after_response", "standard_response_enabled", "request_phone_exchange", "request_attachment_resume", "request_wechat_exchange", "exchange_contact_after_screening_pass", "skip_inquiry_on_abandoned_intent", "mark_unprocessable_sessions", "follow_up_message_enabled")
 	}

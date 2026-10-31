@@ -60,11 +60,13 @@ type BelloBuddyAccount struct {
 	UserID      int    `json:"-" gorm:"not null;uniqueIndex:bello_account_identity,priority:1"`
 	AccountHash string `json:"-" gorm:"type:varchar(64);not null;uniqueIndex:bello_account_identity,priority:2"`
 	AccountKey  string `json:"account_key" gorm:"type:varchar(128);not null"`
-	Platform    string `json:"platform" gorm:"type:varchar(16);not null"`
-	DisplayName string `json:"display_name" gorm:"type:varchar(128)"`
-	Version     int64  `json:"version" gorm:"not null"`
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
+	// 招聘平台的稳定用户编号；AccountKey 仍是桌面账号槽位，重建槽位不能改变岗位归属。
+	PlatformAccountID string `json:"platform_account_id,omitempty" gorm:"type:varchar(128);index"`
+	Platform          string `json:"platform" gorm:"type:varchar(16);not null"`
+	DisplayName       string `json:"display_name" gorm:"type:varchar(128)"`
+	Version           int64  `json:"version" gorm:"not null"`
+	CreatedAt         int64  `json:"created_at"`
+	UpdatedAt         int64  `json:"updated_at"`
 }
 
 type BelloBuddyJob struct {

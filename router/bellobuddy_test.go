@@ -287,11 +287,26 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			request(http.MethodGet, "/plans", "local-only", nil, http.StatusUnauthorized)
 			request(http.MethodGet, "/capabilities", "", nil, http.StatusUnauthorized)
 			request(http.MethodGet, "/capabilities", "local-only", nil, http.StatusUnauthorized)
+			typingPath := "/accounts/typing-account/jobs/typing-job/typing-invitations"
+			request(http.MethodPost, typingPath, "", map[string]any{}, http.StatusUnauthorized)
+			request(http.MethodPost, typingPath, "local-only", map[string]any{}, http.StatusUnauthorized)
 			patRaw := "nap_bellobuddy-personal-token-test"
 			pat := model.UserAccessToken{UserId: users[0].Id, Name: "测试 PAT", TokenHash: model.AccessTokenFingerprint(patRaw), Scopes: "[]"}
 			require.NoError(t, db.Create(&pat).Error)
 			request(http.MethodGet, "/plans", patRaw, nil, http.StatusForbidden)
 			request(http.MethodGet, "/capabilities", patRaw, nil, http.StatusForbidden)
+			request(http.MethodPost, typingPath, patRaw, map[string]any{}, http.StatusForbidden)
+			request(http.MethodPost, typingPath, tokens[0], map[string]any{}, http.StatusServiceUnavailable)
+			t.Run("测评邀请拒绝跨站请求", func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, "https://panel.example/api/bellobuddy"+typingPath, strings.NewReader(`{}`))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", "Bearer "+tokens[0])
+				req.Header.Set("Origin", "https://evil.example")
+				recorder := httptest.NewRecorder()
+				engine.ServeHTTP(recorder, req)
+				require.Equal(t, http.StatusForbidden, recorder.Code)
+				assert.Contains(t, recorder.Body.String(), `"code":"AUTH_ORIGIN_FORBIDDEN"`)
+			})
 			capabilities := request(http.MethodGet, "/capabilities", tokens[0], nil, http.StatusOK)
 			assert.JSONEq(t, `{
 				"schema_version":1,"plan_kinds":["filter","communication"],
@@ -306,6 +321,7 @@ func TestBelloBuddyConfiguration(t *testing.T) {
 			require.NoError(t, db.Model(&model.UserSession{}).Where("sid = ?", identityOther.SessionID).Update("expires_at", common.GetTimestamp()-1).Error)
 			request(http.MethodGet, "/plans", tokens[1], nil, http.StatusUnauthorized)
 			request(http.MethodGet, "/capabilities", tokens[1], nil, http.StatusUnauthorized)
+			request(http.MethodPost, typingPath, tokens[1], map[string]any{}, http.StatusUnauthorized)
 			require.NoError(t, db.Model(&model.UserSession{}).Where("sid = ?", identityOther.SessionID).Update("expires_at", common.GetTimestamp()+3600).Error)
 			require.NoError(t, db.Model(&users[1]).Update("status", common.UserStatusDisabled).Error)
 			request(http.MethodGet, "/plans", tokens[1], nil, http.StatusUnauthorized)

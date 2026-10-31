@@ -26,6 +26,7 @@ func registerBelloBuddyRoutes(apiRouter *gin.RouterGroup) {
 	routes.POST("/accounts/:accountKey/runtime-snapshot/renew", controller.RenewBelloBuddyRuntimeSnapshot)
 	archives := routes.Group("")
 	archives.Use(middleware.BelloBuddyResumeSession())
+	archives.POST("/accounts/:accountKey/jobs/:jobId/typing-invitations", middleware.UserCriticalRateLimit("bellobuddy_typing_invitation"), controller.PrepareBelloBuddyTypingInvitation)
 	archives.POST("/accounts/:accountKey/job-catalog/syncs", controller.SyncBelloBuddyJobCatalog)
 	archives.GET("/accounts/:accountKey/job-catalog/syncs/:syncId", controller.GetBelloBuddyJobCatalog)
 	archives.POST("/accounts/:accountKey/job-catalog/syncs/:syncId/reconcile", controller.ReconcileBelloBuddyJobCatalog)

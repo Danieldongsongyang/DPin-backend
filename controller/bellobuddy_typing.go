@@ -6,9 +6,24 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
+
+func PrepareBelloBuddyTypingInvitation(c *gin.Context) {
+	var input service.BelloBuddyTypingInvitationInput
+	if !belloReadBody(c, &input) {
+		return
+	}
+	identity, ok := middleware.GetSessionAuthIdentity(c)
+	if !ok {
+		belloReply(c, nil, service.ErrBelloBuddySnapshotInvalid)
+		return
+	}
+	result, err := service.PrepareBelloBuddyTypingInvitation(identity, c.Param("accountKey"), c.Param("jobId"), input)
+	belloReply(c, result, err)
+}
 
 // Public only through an opaque assessment ticket issued in the authenticated DPin flow.
 func BelloBuddyTypingPublic(c *gin.Context) {

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -26,11 +28,12 @@ type BelloBuddyCatalogJob struct {
 	SourceWarning string  `json:"source_warning,omitempty"`
 }
 type BelloBuddyCatalogInput struct {
-	ClientSyncID string                 `json:"client_sync_id"`
-	ObservedAt   int64                  `json:"observed_at"`
-	Trigger      string                 `json:"trigger"`
-	DisplayName  string                 `json:"display_name"`
-	Jobs         []BelloBuddyCatalogJob `json:"jobs"`
+	ClientSyncID      string                 `json:"client_sync_id"`
+	PlatformAccountID string                 `json:"platform_account_id,omitempty"`
+	ObservedAt        int64                  `json:"observed_at"`
+	Trigger           string                 `json:"trigger"`
+	DisplayName       string                 `json:"display_name"`
+	Jobs              []BelloBuddyCatalogJob `json:"jobs"`
 }
 type BelloBuddyCatalogReceipt struct {
 	ClientSyncID string                       `json:"client_sync_id"`
@@ -41,6 +44,189 @@ type BelloBuddyCatalogReceipt struct {
 func resumeJobMapKey(target FeishuArchiveTarget, userID, accountID, jobID int) string {
 	data, _ := common.Marshal(target)
 	return model.BelloBuddyIdentityHash(fmt.Sprintf("%s:%d:%d:%d", data, userID, accountID, jobID))
+}
+
+func jobPlatformAccountIdentity(userID int, account *model.BelloBuddyAccount) string {
+	if account.PlatformAccountID == "" {
+		return account.AccountKey
+	}
+	return fmt.Sprintf("dpin:%d:boss:%s", userID, account.PlatformAccountID)
+}
+
+var jobPlatformAccountIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
+
+func validJobPlatformAccountID(value string) bool {
+	return jobPlatformAccountIDPattern.MatchString(value) && !strings.HasPrefix(value, "acc_")
+}
+
+// 本地账号槽位和回执保持各自归属；只在持有 base 租约的 worker 中复用已核验的飞书行。
+// 旧映射已有行时不改指向，避免迁移既有人才关联；没有稳定身份的历史行不能靠名称认领。
+func (engine *BelloBuddyResumeEngine) jobIdentityMappings(account *model.BelloBuddyAccount, job *model.BelloBuddyJob, userID int) ([]model.BelloBuddyResumeJobMap, map[string]bool, error) {
+	accounts := []model.BelloBuddyAccount{*account}
+	if account.PlatformAccountID != "" {
+		if err := engine.DB.Where("user_id = ? AND platform = ? AND platform_account_id = ?", userID, "boss", account.PlatformAccountID).Find(&accounts).Error; err != nil {
+			return nil, nil, err
+		}
+	}
+	accountIDs := make([]int, 0, len(accounts))
+	accountKeys := make(map[string]bool, len(accounts))
+	for _, alias := range accounts {
+		accountIDs = append(accountIDs, alias.ID)
+		accountKeys[alias.AccountKey] = true
+	}
+	var jobs []model.BelloBuddyJob
+	if err := engine.DB.Where("account_id IN ? AND job_hash = ?", accountIDs, model.BelloBuddyIdentityHash(job.JobID)).Find(&jobs).Error; err != nil {
+		return nil, nil, err
+	}
+	keys := make([]string, 0, len(jobs))
+	for _, alias := range jobs {
+		keys = append(keys, resumeJobMapKey(engine.Config.Target, userID, alias.AccountID, alias.ID))
+	}
+	var mappings []model.BelloBuddyResumeJobMap
+	if err := engine.DB.Where("map_key IN ?", keys).Find(&mappings).Error; err != nil {
+		return nil, nil, err
+	}
+	return mappings, accountKeys, nil
+}
+
+func (engine *BelloBuddyResumeEngine) shareVerifiedJobFields(account *model.BelloBuddyAccount, job *model.BelloBuddyJob, userID int, mapping *model.BelloBuddyResumeJobMap) error {
+	mappings, _, err := engine.jobIdentityMappings(account, job, userID)
+	if err != nil {
+		return err
+	}
+	ids := []int{}
+	for _, alias := range mappings {
+		if alias.RecordID == mapping.RecordID {
+			ids = append(ids, alias.ID)
+		}
+	}
+	return engine.DB.Model(&model.BelloBuddyResumeJobMap{}).Where("id IN ? AND record_id = ?", ids, mapping.RecordID).Update("managed_fields", mapping.ManagedFields).Error
+}
+
+func (engine *BelloBuddyResumeEngine) reuseJobMapping(ctx context.Context, account *model.BelloBuddyAccount, job *model.BelloBuddyJob, user *model.User, mapping *model.BelloBuddyResumeJobMap, observation *model.BelloBuddyJobCatalog) (bool, error) {
+	if !engine.Config.JobSync.Enabled {
+		return false, nil
+	}
+	mappings, accountKeys, err := engine.jobIdentityMappings(account, job, user.Id)
+	if err != nil {
+		return false, err
+	}
+	mapIDs := make([]int, 0, len(mappings))
+	for _, alias := range mappings {
+		mapIDs = append(mapIDs, alias.ID)
+	}
+	var catalogs []model.BelloBuddyJobCatalog
+	if err := engine.DB.Where("job_map_id IN ?", mapIDs).Find(&catalogs).Error; err != nil {
+		return false, err
+	}
+	var newer *model.BelloBuddyJobCatalog
+	for _, catalog := range catalogs {
+		if observation != nil && (catalog.ObservedAt > observation.ObservedAt || catalog.ObservedAt == observation.ObservedAt && catalog.ID > observation.ID) {
+			if newer == nil || catalog.ObservedAt > newer.ObservedAt || catalog.ObservedAt == newer.ObservedAt && catalog.ID > newer.ID {
+				newer = &catalog
+			}
+		}
+		if catalog.AttemptID != "" {
+			return false, resumeUnknown("JOB_UPDATE_RESULT_UNKNOWN_OR_CHANGED")
+		}
+	}
+	var newerMapping *model.BelloBuddyResumeJobMap
+	if newer != nil {
+		for _, alias := range mappings {
+			if alias.ID == newer.JobMapID && alias.RecordID != "" && alias.ManagedFields != "" {
+				newerMapping = &alias
+			}
+		}
+		if newer.State != "synced" || newerMapping == nil {
+			return false, resumeUnknown("JOB_NEWER_SOURCE_PENDING")
+		}
+		record, err := engine.Backend.Get(ctx, engine.Config.Target.JobTable, newerMapping.RecordID)
+		if err != nil {
+			return false, err
+		}
+		var verified map[string]any
+		if common.UnmarshalJsonStr(newerMapping.ManagedFields, &verified) != nil || !resumeFieldsMatch(record, verified) {
+			return false, resumeUnknown("JOB_NEWER_SOURCE_PENDING")
+		}
+	}
+	if mapping.RecordID != "" {
+		if newerMapping != nil && newerMapping.RecordID != mapping.RecordID {
+			return false, resumeUnknown("JOB_IDENTITY_AMBIGUOUS")
+		}
+		return newer != nil, nil
+	}
+	known := map[string]model.BelloBuddyResumeJobMap{}
+	for _, alias := range mappings {
+		if alias.RecordID == "" && alias.AttemptID != "" {
+			return false, resumeUnknown("JOB_CREATE_RESULT_UNKNOWN")
+		}
+		if alias.RecordID != "" {
+			known[alias.RecordID] = alias
+		}
+	}
+	if len(known) > 1 {
+		return false, resumeUnknown("JOB_IDENTITY_AMBIGUOUS")
+	}
+	target := engine.Config.Target
+	var selected *FeishuArchiveRecord
+	for id := range known {
+		record, err := engine.Backend.Get(ctx, target.JobTable, id)
+		if err != nil {
+			return false, err
+		}
+		// 数据库已证明旧槽位归属；允许旧简历路径创建的行尚未补齐职位来源字段。
+		if record.Fields[target.Fields["hr"]] != user.Username {
+			return false, resumeUnknown("JOB_IDENTITY_AMBIGUOUS")
+		}
+		if value := record.Fields[engine.Config.JobSync.Fields["job_id"]]; value != nil && value != "" && value != job.JobID {
+			return false, resumeUnknown("JOB_IDENTITY_AMBIGUOUS")
+		}
+		if value, ok := record.Fields[engine.Config.JobSync.Fields["account_id"]].(string); ok && value != "" && !accountKeys[value] && value != jobPlatformAccountIdentity(user.Id, account) {
+			return false, resumeUnknown("JOB_IDENTITY_AMBIGUOUS")
+		}
+		selected = record
+	}
+	if selected == nil {
+		records, err := engine.Backend.SearchJobs(ctx, target.JobTable, user.Username, job.JobID)
+		if err != nil {
+			return false, err
+		}
+		for _, record := range records {
+			if record.Fields[target.Fields["hr"]] != user.Username || record.Fields[engine.Config.JobSync.Fields["platform"]] != "BOSS直聘" || record.Fields[engine.Config.JobSync.Fields["job_id"]] != job.JobID {
+				return false, resumeUnknown("JOB_IDENTITY_AMBIGUOUS")
+			}
+			remoteAccount, _ := record.Fields[engine.Config.JobSync.Fields["account_id"]].(string)
+			// 仅凭旧槽位字符串不能恢复 DPin 用户归属；旧行必须先由数据库映射证明。
+			matched := account.PlatformAccountID != "" && remoteAccount == jobPlatformAccountIdentity(user.Id, account)
+			if !matched {
+				parts := strings.SplitN(remoteAccount, ":", 4)
+				ownerID := 0
+				if len(parts) == 4 && parts[0] == "dpin" && parts[2] == "boss" && validJobPlatformAccountID(parts[3]) {
+					ownerID, _ = strconv.Atoi(parts[1])
+				}
+				if ownerID > 0 && (ownerID != user.Id || account.PlatformAccountID != "") {
+					continue // 明确属于另一真实招聘账号，不合并。
+				}
+				return false, resumeUnknown("JOB_IDENTITY_AMBIGUOUS")
+			}
+			if selected != nil && selected.ID != record.ID {
+				return false, resumeUnknown("JOB_IDENTITY_AMBIGUOUS")
+			}
+			selected = &record
+		}
+	}
+	if selected == nil {
+		return false, nil
+	}
+	managed, err := common.Marshal(selected.Fields)
+	if err != nil {
+		return false, err
+	}
+	if err := engine.DB.Model(mapping).Updates(map[string]any{"record_id": selected.ID, "managed_fields": string(managed)}).Error; err != nil {
+		return false, err
+	}
+	mapping.RecordID, mapping.ManagedFields = selected.ID, string(managed)
+	return newer != nil, nil
 }
 func (engine *BelloBuddyResumeEngine) CatalogReceipt(userID int, accountKey, clientID string) (*BelloBuddyCatalogReceipt, error) {
 	if ValidateBelloBuddyIdentifier(accountKey) != nil || ValidateBelloBuddyIdentifier(clientID) != nil {
@@ -73,6 +259,9 @@ func (engine *BelloBuddyResumeEngine) AcceptJobCatalog(userID int, accountKey st
 	if ValidateBelloBuddyIdentifier(accountKey) != nil || ValidateBelloBuddyIdentifier(input.ClientSyncID) != nil || input.ObservedAt <= 0 || input.ObservedAt > time.Now().UnixMilli()+300000 || !slices.Contains([]string{"login", "list", "refresh"}, input.Trigger) || utf8.RuneCountInString(input.DisplayName) > 128 || len(input.Jobs) > BelloBuddyMaxJobs {
 		return nil, belloInvalid("职位同步来源、编号或数量无效")
 	}
+	if input.PlatformAccountID != "" && !validJobPlatformAccountID(input.PlatformAccountID) {
+		return nil, belloInvalid("招聘平台账号编号无效")
+	}
 	seen := map[string]bool{}
 	for _, job := range input.Jobs {
 		encodedJob, err := common.Marshal(job)
@@ -94,6 +283,17 @@ func (engine *BelloBuddyResumeEngine) AcceptJobCatalog(userID int, accountKey st
 	target, _ := common.Marshal([]any{engine.Config.Target, engine.Config.JobSync.Fields})
 	// 不以列表缺席推定下线；只更新实际观察到且具有明确状态的职位。
 	err := model.WithBelloBuddyAccount(userID, accountKey, true, func(tx *gorm.DB, account *model.BelloBuddyAccount) error {
+		if input.PlatformAccountID != "" {
+			if account.PlatformAccountID != "" && account.PlatformAccountID != input.PlatformAccountID {
+				return &BelloBuddyError{409, "JOB_IDENTITY_CONFLICT", "此账号槽位已绑定其他 BOSS 账号，请核对账号后重新同步"}
+			}
+			if account.PlatformAccountID == "" {
+				if err := tx.Model(account).Update("platform_account_id", input.PlatformAccountID).Error; err != nil {
+					return err
+				}
+				account.PlatformAccountID = input.PlatformAccountID
+			}
+		}
 		var old model.BelloBuddyJobSyncBatch
 		if err := tx.Where("sync_key = ?", key).First(&old).Error; err == nil {
 			if old.PayloadHash != hash {
@@ -197,7 +397,7 @@ func (engine *BelloBuddyResumeEngine) runJobCatalog(ctx context.Context, lease *
 	if lease.BusyJobSyncID != 0 {
 		query = engine.DB.Where("id = ?", lease.BusyJobSyncID)
 	}
-	if err := query.Order("id").First(&task).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := query.Order("observed_at DESC").Order("id DESC").First(&task).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil
 	} else if err != nil {
 		return err
@@ -319,7 +519,8 @@ func (engine *BelloBuddyResumeEngine) processJobCatalog(ctx context.Context, tas
 		return resumeUnknown("JOB_SOURCE_INVALID")
 	}
 	fields := map[string]any{target.Fields["job_name"]: source.Name, target.Fields["hr"]: user.Username}
-	for key, value := range map[string]string{"account": account.DisplayName, "account_id": account.AccountKey, "platform": "BOSS直聘", "job_id": source.JobID, "online": map[bool]string{true: "在招", false: "已下线"}[*source.Online]} {
+	remoteAccountID := jobPlatformAccountIdentity(user.Id, &account)
+	for key, value := range map[string]string{"account": account.DisplayName, "account_id": remoteAccountID, "platform": "BOSS直聘", "job_id": source.JobID, "online": map[bool]string{true: "在招", false: "已下线"}[*source.Online]} {
 		fields[engine.Config.JobSync.Fields[key]] = value
 	}
 	if source.City != nil {
@@ -381,6 +582,9 @@ func (engine *BelloBuddyResumeEngine) processJobCatalog(ctx context.Context, tas
 		}
 		task.AttemptID = ""
 		mapping.ManagedFields = string(data)
+		if err := engine.shareVerifiedJobFields(&account, job, user.Id, &mapping); err != nil {
+			return err
+		}
 	} else if mapping.RecordID == "" && mapping.AttemptID != "" {
 		receipt, err := engine.readReceipt(mapping.AttemptID)
 		if err != nil {
@@ -394,13 +598,25 @@ func (engine *BelloBuddyResumeEngine) processJobCatalog(ctx context.Context, tas
 			return err
 		}
 	}
+	stale, err := engine.reuseJobMapping(ctx, &account, job, user, &mapping, task)
+	if err != nil {
+		return err
+	}
+	if stale {
+		return nil
+	}
 	if mapping.RecordID != "" {
 		record, err := engine.Backend.Get(ctx, target.JobTable, mapping.RecordID)
 		if err != nil {
 			return err
 		}
 		if resumeFieldsMatch(record, fields) {
-			return nil
+			managed, err := common.Marshal(fields)
+			if err != nil {
+				return err
+			}
+			mapping.ManagedFields = string(managed)
+			return engine.shareVerifiedJobFields(&account, job, user.Id, &mapping)
 		}
 	}
 	if err := engine.writeJobCatalog(ctx, task, &mapping, fields); err != nil {

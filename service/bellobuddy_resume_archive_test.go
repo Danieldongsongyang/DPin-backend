@@ -79,6 +79,18 @@ func (f *resumeFakeFeishu) Search(_ context.Context, _ string, field, value stri
 	}
 	return records, nil
 }
+func (f *resumeFakeFeishu) SearchJobs(_ context.Context, _ string, hr, jobID string) ([]FeishuArchiveRecord, error) {
+	if f.fault == "job_search_unavailable" {
+		return nil, resumeUnknown("CLI_TIMEOUT")
+	}
+	records := []FeishuArchiveRecord{}
+	for _, record := range f.records {
+		if record.Fields[f.config.Target.Fields["hr"]] == hr && record.Fields[f.config.JobSync.Fields["platform"]] == "BOSS直聘" && record.Fields[f.config.JobSync.Fields["job_id"]] == jobID {
+			records = append(records, *record)
+		}
+	}
+	return records, nil
+}
 func (f *resumeFakeFeishu) Write(_ context.Context, table, id string, fields map[string]any) (map[string]any, error) {
 	creating := id == ""
 	if creating {
@@ -219,11 +231,18 @@ func TestBelloBuddyResumeArchiveDatabaseMatrix(t *testing.T) {
 			var version string
 			require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
 			t.Logf("真实数据库 %s %s", dialect, version)
+			// 全新建库和重复启动同样覆盖；随后重建旧版账号结构验证真实升级。
+			for range 2 {
+				require.NoError(t, db.AutoMigrate(tables...))
+			}
+			for i := len(tables) - 1; i >= 0; i-- {
+				require.NoError(t, db.Migrator().DropTable(tables[i]))
+			}
 			// 最新主模型先建库并保留代表性账号／职位，再升级新增归档模型。
-			require.NoError(t, db.AutoMigrate(base...))
+			require.NoError(t, db.AutoMigrate(&model.User{}, &legacyCatalogAccount{}, &model.BelloBuddyJob{}))
 			users := []model.User{{Id: 1, Username: "F1_TEST", DisplayName: "不作为HR匹配来源", Status: common.UserStatusEnabled, AffCode: "f1_a"}, {Id: 2, Username: "F1_TEST_B", Status: common.UserStatusEnabled, AffCode: "f1_b"}}
 			require.NoError(t, db.Create(&users).Error)
-			accounts := []model.BelloBuddyAccount{{UserID: 1, AccountKey: "account-A", AccountHash: model.BelloBuddyIdentityHash("account-A"), DisplayName: "F1_TEST A", Platform: "boss", Version: 1}, {UserID: 1, AccountKey: "account-B", AccountHash: model.BelloBuddyIdentityHash("account-B"), Platform: "boss", Version: 1}, {UserID: 2, AccountKey: "account-A", AccountHash: model.BelloBuddyIdentityHash("account-A"), Platform: "boss", Version: 1}}
+			accounts := []legacyCatalogAccount{{UserID: 1, AccountKey: "account-A", AccountHash: model.BelloBuddyIdentityHash("account-A"), DisplayName: "F1_TEST A", Platform: "boss", Version: 1}, {UserID: 1, AccountKey: "account-B", AccountHash: model.BelloBuddyIdentityHash("account-B"), Platform: "boss", Version: 1}, {UserID: 2, AccountKey: "account-A", AccountHash: model.BelloBuddyIdentityHash("account-A"), Platform: "boss", Version: 1}}
 			require.NoError(t, db.Create(&accounts).Error)
 			jobs := []model.BelloBuddyJob{{AccountID: 1, JobID: "job-A", JobHash: model.BelloBuddyIdentityHash("job-A"), Name: "F1_TEST岗位", Version: 1}, {AccountID: 2, JobID: "job-A", JobHash: model.BelloBuddyIdentityHash("job-A"), Name: "F1_TEST岗位", Version: 1}, {AccountID: 3, JobID: "job-A", JobHash: model.BelloBuddyIdentityHash("job-A"), Name: "F1_TEST岗位", Version: 1}, {AccountID: 1, JobID: "job-B", JobHash: model.BelloBuddyIdentityHash("job-B"), Name: "F1_TEST岗位", Version: 1}}
 			require.NoError(t, db.Create(&jobs).Error)
@@ -239,6 +258,10 @@ func TestBelloBuddyResumeArchiveDatabaseMatrix(t *testing.T) {
 				require.NoError(t, db.AutoMigrate(tables...))
 			}
 			var upgradedMap model.BelloBuddyResumeJobMap
+			var upgradedAccount model.BelloBuddyAccount
+			require.NoError(t, db.First(&upgradedAccount, 1).Error)
+			assert.Empty(t, upgradedAccount.PlatformAccountID)
+			assert.Equal(t, "account-A", upgradedAccount.AccountKey)
 			require.NoError(t, db.First(&upgradedMap, legacyMap.ID).Error)
 			assert.Equal(t, "rec_legacy", upgradedMap.RecordID)
 			assert.Equal(t, "legacy_attempt", upgradedMap.AttemptID)
@@ -253,6 +276,15 @@ func TestBelloBuddyResumeArchiveDatabaseMatrix(t *testing.T) {
 			var preserved model.BelloBuddyJob
 			require.NoError(t, db.First(&preserved, 1).Error)
 			assert.Equal(t, "F1_TEST岗位", preserved.Name)
+			duplicateAccount := upgradedAccount
+			duplicateAccount.ID = 0
+			require.Error(t, db.Create(&duplicateAccount).Error, "升级后必须保留用户和账号标识的唯一约束")
+			duplicateJob := preserved
+			duplicateJob.ID = 0
+			require.Error(t, db.Create(&duplicateJob).Error, "升级后必须保留账号和平台职位的唯一约束")
+			duplicateMap := upgradedMap
+			duplicateMap.ID = 0
+			require.Error(t, db.Create(&duplicateMap).Error, "升级后必须保留飞书职位映射键的唯一约束")
 			t.Run("lease_expiry_preserves_inflight_work", func(t *testing.T) {
 				key := model.BelloBuddyIdentityHash("F1_TEST_lease")
 				now := time.Now().Unix()
@@ -459,6 +491,7 @@ func TestBelloBuddyResumeArchiveDatabaseMatrix(t *testing.T) {
 				})
 			}
 			t.Run("job_catalog_contracts", func(t *testing.T) { verifyJobCatalogContracts(t, db) })
+			t.Run("stable_job_identity", func(t *testing.T) { verifyStableJobIdentity(t, db) })
 		})
 	}
 }
@@ -491,6 +524,20 @@ func TestFeishuDateReadbackPreservesTextAndInstant(t *testing.T) {
 }
 
 // 明确的旧版本结构，验证新增列在已存在映射／租约／尝试上升级，并重复迁移。
+type legacyCatalogAccount struct {
+	ID          int    `gorm:"primaryKey"`
+	UserID      int    `gorm:"not null;uniqueIndex:bello_account_identity,priority:1"`
+	AccountHash string `gorm:"type:varchar(64);not null;uniqueIndex:bello_account_identity,priority:2"`
+	AccountKey  string `gorm:"type:varchar(128);not null"`
+	Platform    string `gorm:"type:varchar(16);not null"`
+	DisplayName string `gorm:"type:varchar(128)"`
+	Version     int64  `gorm:"not null"`
+	CreatedAt   int64
+	UpdatedAt   int64
+}
+
+func (legacyCatalogAccount) TableName() string { return "bello_buddy_accounts" }
+
 type legacyResumeJobMap struct {
 	ID        int    `gorm:"primaryKey"`
 	MapKey    string `gorm:"type:varchar(64);not null;uniqueIndex"`
@@ -500,7 +547,8 @@ type legacyResumeJobMap struct {
 
 func (legacyResumeJobMap) TableName() string { return "bello_buddy_resume_job_maps" }
 
-func verifyJobCatalogContracts(t *testing.T, db *gorm.DB) {
+func jobCatalogTestEngine(t *testing.T, db *gorm.DB) (*BelloBuddyResumeEngine, *resumeFakeFeishu) {
+	t.Helper()
 	for _, table := range model.BelloBuddyResumeModels() {
 		require.NoError(t, db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(table).Error)
 	}
@@ -521,10 +569,16 @@ func verifyJobCatalogContracts(t *testing.T, db *gorm.DB) {
 	}
 	backend := &resumeFakeFeishu{config: config, records: map[string]*FeishuArchiveRecord{}, hashes: map[string]string{}, hrType: "text"}
 	engine := &BelloBuddyResumeEngine{DB: db, Config: config, Backend: backend}
+	return engine, backend
+}
+
+func verifyJobCatalogContracts(t *testing.T, db *gorm.DB) {
+	engine, backend := jobCatalogTestEngine(t, db)
+	config := engine.Config
 	online := true
 	city := "上海"
 	description := "F1_TEST 完整JD\n第二段"
-	input := BelloBuddyCatalogInput{ClientSyncID: "catalog-initial", ObservedAt: time.Now().UnixMilli() - 100000, Trigger: "login", DisplayName: "F1_TEST", Jobs: []BelloBuddyCatalogJob{{JobID: "job-A", Name: "F1_TEST 同名岗位", Online: &online, City: &city, Description: &description}}}
+	input := BelloBuddyCatalogInput{ClientSyncID: "catalog-initial", PlatformAccountID: "boss-A", ObservedAt: time.Now().UnixMilli() - 100000, Trigger: "login", DisplayName: "F1_TEST", Jobs: []BelloBuddyCatalogJob{{JobID: "job-A", Name: "F1_TEST 同名岗位", Online: &online, City: &city, Description: &description}}}
 	oversized := input
 	oversized.Jobs = append([]BelloBuddyCatalogJob{}, input.Jobs...)
 	escaped := strings.Repeat("\"", 40<<10)
@@ -613,12 +667,14 @@ func verifyJobCatalogContracts(t *testing.T, db *gorm.DB) {
 		user    int
 		account string
 	}{{1, "account-B"}, {2, "account-A"}} {
+		input.PlatformAccountID = map[string]string{"account-A": "boss-A", "account-B": "boss-B"}[identity.account]
 		input.ClientSyncID = fmt.Sprintf("isolation-%d", i)
 		input.ObservedAt++
 		_, err = engine.AcceptJobCatalog(identity.user, identity.account, input)
 		require.NoError(t, err)
 		require.NoError(t, engine.RunOnce(context.Background()))
 	}
+	input.PlatformAccountID = "boss-A"
 	assert.Equal(t, 3, backend.jobWrites)
 	// 更新响应丢失：重建engine先按旧尝试读回，成功后不重复调用更新。
 	input.ClientSyncID = "update-lost"
@@ -655,6 +711,187 @@ func verifyJobCatalogContracts(t *testing.T, db *gorm.DB) {
 	receipt, err = engine.CatalogReceipt(1, "account-A", input.ClientSyncID)
 	require.NoError(t, err)
 	assert.Equal(t, "JOB_CREATE_RESULT_UNKNOWN", receipt.Jobs[0].ErrorCode)
+}
+
+func verifyStableJobIdentity(t *testing.T, db *gorm.DB) {
+	engine, backend := jobCatalogTestEngine(t, db)
+	config := engine.Config
+	online := true
+	observed := time.Now().UnixMilli() - 100000
+	makeInput := func(id, platformID, jobID, name string) BelloBuddyCatalogInput {
+		observed++
+		return BelloBuddyCatalogInput{ClientSyncID: id, PlatformAccountID: platformID, ObservedAt: observed, Trigger: "login", DisplayName: "F1_TEST", Jobs: []BelloBuddyCatalogJob{{JobID: jobID, Name: name, Online: &online}}}
+	}
+	readMap := func(accountKey, clientID string) model.BelloBuddyResumeJobMap {
+		t.Helper()
+		receipt, err := engine.CatalogReceipt(1, accountKey, clientID)
+		require.NoError(t, err)
+		require.Len(t, receipt.Jobs, 1)
+		var mapping model.BelloBuddyResumeJobMap
+		require.NoError(t, db.First(&mapping, receipt.Jobs[0].JobMapID).Error)
+		return mapping
+	}
+
+	// 先有旧槽位/旧字段，再登记真实账号；旧简历 scope 不迁移。
+	legacy := makeInput("identity-legacy", "", "identity-job", "旧岗位名")
+	_, err := engine.AcceptJobCatalog(1, "identity-old-slot", legacy)
+	require.NoError(t, err)
+	require.NoError(t, engine.RunOnce(context.Background()))
+	oldMapping := readMap("identity-old-slot", legacy.ClientSyncID)
+	archive, err := engine.Accept(context.Background(), 1, "identity-old-slot", "identity-job", "F1_TEST.pdf", BelloBuddyResumeInput{ClientUploadID: "identity-resume", CandidateID: "F1_TEST", DownloadedAt: time.Now().UnixMilli()}, bytes.NewReader(resumeFixturePDF("identity")))
+	require.NoError(t, err)
+	bound := makeInput("identity-bind", "stable-boss", "identity-job", "旧岗位名")
+	_, err = engine.AcceptJobCatalog(1, "identity-old-slot", bound)
+	require.NoError(t, err)
+	require.NoError(t, engine.RunOnce(context.Background()))
+	assert.Equal(t, "dpin:1:boss:stable-boss", backend.records[oldMapping.RecordID].Fields[config.JobSync.Fields["account_id"]])
+
+	alias := makeInput("identity-alias", "stable-boss", "identity-job", "新岗位名")
+	_, err = engine.AcceptJobCatalog(1, "identity-new-slot", alias)
+	require.NoError(t, err)
+	require.NoError(t, engine.RunOnce(context.Background()))
+	newMapping := readMap("identity-new-slot", alias.ClientSyncID)
+	assert.NotEqual(t, oldMapping.ID, newMapping.ID)
+	assert.Equal(t, oldMapping.RecordID, newMapping.RecordID)
+	assert.Equal(t, 1, backend.jobWrites)
+	require.NoError(t, engine.RunOnce(context.Background()))
+	archive, err = engine.Get(1, archive.ArchiveID)
+	require.NoError(t, err)
+	assert.Equal(t, "archived", archive.State)
+	var scope model.BelloBuddyResumeScope
+	require.NoError(t, db.First(&scope, archive.ScopeID).Error)
+	assert.Equal(t, oldMapping.ID, scope.JobMapID)
+	assert.Equal(t, "新岗位名", backend.records[oldMapping.RecordID].Fields[config.Target.Fields["job_name"]])
+	assert.Equal(t, 1, backend.jobWrites)
+
+	// 同时排队的新旧来源：新来源先处理，旧任务只在读回成功后复用，回执仍属各自槽位。
+	older := makeInput("identity-older", "stable-boss", "identity-job", "过时岗位名")
+	newer := makeInput("identity-newer", "stable-boss", "identity-job", "最新岗位名")
+	_, err = engine.AcceptJobCatalog(1, "identity-third-slot", older)
+	require.NoError(t, err)
+	_, err = engine.AcceptJobCatalog(1, "identity-new-slot", newer)
+	require.NoError(t, err)
+	require.NoError(t, engine.RunOnce(context.Background()))
+	require.NoError(t, engine.RunOnce(context.Background()))
+	thirdMapping := readMap("identity-third-slot", older.ClientSyncID)
+	assert.Equal(t, oldMapping.RecordID, thirdMapping.RecordID)
+	assert.Equal(t, "最新岗位名", backend.records[oldMapping.RecordID].Fields[config.Target.Fields["job_name"]])
+	assert.Equal(t, 1, backend.jobWrites)
+
+	// 已登记的槽位不可换绑，且不能用本地 acc_* 伪装平台稳定编号。
+	for _, badID := range []string{"acc_fake", "bad:id", "bad/id"} {
+		bad := makeInput("identity-invalid-"+strings.ReplaceAll(badID, "/", "-"), badID, "identity-job", "岗位")
+		_, err = engine.AcceptJobCatalog(1, "identity-invalid-slot", bad)
+		require.Error(t, err)
+		assert.Equal(t, "INVALID_REQUEST", resumeFailureCode(err))
+	}
+	conflict := makeInput("identity-conflict", "another-boss", "identity-job", "岗位")
+	_, err = engine.AcceptJobCatalog(1, "identity-old-slot", conflict)
+	require.Error(t, err)
+	assert.Equal(t, "JOB_IDENTITY_CONFLICT", resumeFailureCode(err))
+
+	// 相同岗位 ID，另一真实 BOSS 账号或另一 DPin 用户仍独立。
+	other := makeInput("identity-other-boss", "another-boss", "identity-job", "同名岗位")
+	_, err = engine.AcceptJobCatalog(1, "identity-other-slot", other)
+	require.NoError(t, err)
+	require.NoError(t, engine.RunOnce(context.Background()))
+	assert.NotEqual(t, oldMapping.RecordID, readMap("identity-other-slot", other.ClientSyncID).RecordID)
+	otherUser := makeInput("identity-other-user", "stable-boss", "identity-job", "同名岗位")
+	_, err = engine.AcceptJobCatalog(2, "identity-user2-slot", otherUser)
+	require.NoError(t, err)
+	require.NoError(t, engine.RunOnce(context.Background()))
+	assert.Equal(t, 3, backend.jobWrites)
+
+	// 数据库没有映射时，精确稳定标记可恢复；未知旧行或旧客户端身份缺失不能盲目新建。
+	for _, tc := range []struct{ name, remoteID, stableID, wantCode string }{
+		{"remote-stable", "dpin:1:boss:remote-boss", "remote-boss", ""},
+		{"remote-legacy", "acc_old_unknown", "remote-boss", "JOB_IDENTITY_AMBIGUOUS"},
+		{"remote-old-client", "dpin:1:boss:remote-boss", "", "JOB_IDENTITY_AMBIGUOUS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			jobID, recordID := "job-"+tc.name, "rec-"+tc.name
+			backend.records[recordID] = &FeishuArchiveRecord{ID: recordID, Fields: map[string]any{config.Target.Fields["hr"]: "F1_TEST", config.Target.Fields["job_name"]: "岗位", config.JobSync.Fields["platform"]: "BOSS直聘", config.JobSync.Fields["job_id"]: jobID, config.JobSync.Fields["account_id"]: tc.remoteID}}
+			input := makeInput(tc.name, tc.stableID, jobID, "岗位")
+			before := backend.jobWrites
+			_, err := engine.AcceptJobCatalog(1, "slot-"+tc.name, input)
+			require.NoError(t, err)
+			err = engine.RunOnce(context.Background())
+			if tc.wantCode == "" {
+				require.NoError(t, err)
+				assert.Equal(t, recordID, readMap("slot-"+tc.name, input.ClientSyncID).RecordID)
+			} else {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantCode, resumeFailureCode(err))
+				assert.Empty(t, readMap("slot-"+tc.name, input.ClientSyncID).RecordID)
+			}
+			assert.Equal(t, before, backend.jobWrites)
+		})
+	}
+
+	// 新来源尚未成功时，旧来源不能冒充已同步；失败查询也不能转换为“没找到”。
+	failedNew := makeInput("identity-failed-new", "failure-boss", "failure-job", "新")
+	failedOld := makeInput("identity-failed-old", "failure-boss", "failure-job", "旧")
+	failedOld.ObservedAt = failedNew.ObservedAt - 1
+	_, err = engine.AcceptJobCatalog(1, "failure-old-slot", failedOld)
+	require.NoError(t, err)
+	_, err = engine.AcceptJobCatalog(1, "failure-new-slot", failedNew)
+	require.NoError(t, err)
+	backend.fault = "job_search_unavailable"
+	require.Error(t, engine.RunOnce(context.Background()))
+	backend.fault = ""
+	err = engine.RunOnce(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, "JOB_NEWER_SOURCE_PENDING", resumeFailureCode(err))
+	failedReceipt, err := engine.CatalogReceipt(1, "failure-old-slot", failedOld.ClientSyncID)
+	require.NoError(t, err)
+	assert.Equal(t, "blocked", failedReceipt.Jobs[0].State)
+	assert.Empty(t, readMap("failure-old-slot", failedOld.ClientSyncID).RecordID)
+
+	// 飞书已存在两条同身份行时，不挑一条覆盖或新增第三条。
+	for _, recordID := range []string{"rec-duplicate-1", "rec-duplicate-2"} {
+		backend.records[recordID] = &FeishuArchiveRecord{ID: recordID, Fields: map[string]any{config.Target.Fields["hr"]: "F1_TEST", config.Target.Fields["job_name"]: "岗位", config.JobSync.Fields["platform"]: "BOSS直聘", config.JobSync.Fields["job_id"]: "duplicate-job", config.JobSync.Fields["account_id"]: "dpin:1:boss:duplicate-boss"}}
+	}
+	duplicate := makeInput("duplicate-input", "duplicate-boss", "duplicate-job", "岗位")
+	before := backend.jobWrites
+	_, err = engine.AcceptJobCatalog(1, "duplicate-new-slot", duplicate)
+	require.NoError(t, err)
+	err = engine.RunOnce(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, "JOB_IDENTITY_AMBIGUOUS", resumeFailureCode(err))
+	assert.Equal(t, before, backend.jobWrites)
+	assert.NotNil(t, backend.records["rec-duplicate-1"])
+	assert.NotNil(t, backend.records["rec-duplicate-2"])
+
+	// 代表升级前已存在的两个映射：绑定到同一真实账号后仍保留旧指向，新槽位明确受阻。
+	require.NoError(t, db.Model(&model.BelloBuddyAccount{}).Where("user_id = ? AND account_key = ?", 1, "identity-other-slot").Update("platform_account_id", "stable-boss").Error)
+	knownDuplicate := makeInput("known-duplicate-input", "stable-boss", "identity-job", "岗位")
+	_, err = engine.AcceptJobCatalog(1, "known-duplicate-new-slot", knownDuplicate)
+	require.NoError(t, err)
+	err = engine.RunOnce(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, "JOB_IDENTITY_AMBIGUOUS", resumeFailureCode(err))
+	assert.Equal(t, before, backend.jobWrites)
+	assert.Equal(t, oldMapping.RecordID, readMap("identity-old-slot", legacy.ClientSyncID).RecordID)
+	assert.NotEqual(t, oldMapping.RecordID, readMap("identity-other-slot", other.ClientSyncID).RecordID)
+
+	// 创建响应丢失后重建 engine、换槽位，都不能再次创建。
+	unknown := makeInput("identity-unknown", "unknown-boss", "unknown-job", "岗位")
+	_, err = engine.AcceptJobCatalog(1, "unknown-first-slot", unknown)
+	require.NoError(t, err)
+	backend.fault = "job_response_lost"
+	require.Error(t, engine.RunOnce(context.Background()))
+	before = backend.jobWrites
+	backend.fault = ""
+	unknownAlias := makeInput("identity-unknown-alias", "unknown-boss", "unknown-job", "岗位")
+	_, err = engine.AcceptJobCatalog(1, "unknown-second-slot", unknownAlias)
+	require.NoError(t, err)
+	restarted := &BelloBuddyResumeEngine{DB: db, Config: config, Backend: backend}
+	require.NoError(t, restarted.RunOnce(context.Background()))
+	assert.Equal(t, before, backend.jobWrites)
+	assert.Empty(t, readMap("unknown-second-slot", unknownAlias.ClientSyncID).RecordID)
+	unknownReceipt, err := engine.CatalogReceipt(1, "unknown-second-slot", unknownAlias.ClientSyncID)
+	require.NoError(t, err)
+	assert.Equal(t, "queued", unknownReceipt.Jobs[0].State)
 }
 
 type legacyResumeLease struct {

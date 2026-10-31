@@ -76,6 +76,7 @@ type FeishuArchiveBackend interface {
 	Field(context.Context, string, string) (*FeishuArchiveField, error)
 	Get(context.Context, string, string) (*FeishuArchiveRecord, error)
 	Search(context.Context, string, string, string) ([]FeishuArchiveRecord, error)
+	SearchJobs(context.Context, string, string, string) ([]FeishuArchiveRecord, error)
 	Write(context.Context, string, string, map[string]any) (map[string]any, error)
 	Upload(context.Context, string, string) (map[string]any, error)
 	Remove(context.Context, string, []string) (map[string]any, error)
@@ -458,6 +459,67 @@ func (cli *FeishuArchiveCLI) Search(ctx context.Context, table, field, value str
 	}
 	return decodeFeishuRecords(data)
 }
+
+// SearchJobs only discovers candidates within the same HR and platform job.
+// The caller must still verify the stable platform account before claiming a row.
+func (cli *FeishuArchiveCLI) SearchJobs(ctx context.Context, table, hr, jobID string) ([]FeishuArchiveRecord, error) {
+	if table != cli.Config.Target.JobTable || !cli.Config.JobSync.Enabled || hr == "" || jobID == "" {
+		return nil, &FeishuArchiveFailure{Code: "JOB_SYNC_CONFIG_INVALID"}
+	}
+	match := map[string]string{
+		cli.Config.Target.Fields["hr"]:        hr,
+		cli.Config.JobSync.Fields["platform"]: "BOSS直聘",
+		cli.Config.JobSync.Fields["job_id"]:   jobID,
+	}
+	ids := []string{cli.Config.Target.Fields["job_name"], cli.Config.Target.Fields["hr"]}
+	for _, key := range []string{"account", "account_id", "platform", "job_id", "online", "city", "boss_description"} {
+		ids = append(ids, cli.Config.JobSync.Fields[key])
+	}
+	slices.Sort(ids)
+	args := []string{"--limit", "200"}
+	conditions := [][]any{}
+	for _, id := range slices.Compact(ids) {
+		if !strings.HasPrefix(id, "fld") {
+			return nil, &FeishuArchiveFailure{Code: "JOB_SYNC_CONFIG_INVALID"}
+		}
+		args = append(args, "--field-id", id)
+		if value, ok := match[id]; ok {
+			conditions = append(conditions, []any{id, "==", value})
+		}
+	}
+	if len(conditions) != 3 {
+		return nil, &FeishuArchiveFailure{Code: "JOB_SYNC_CONFIG_INVALID"}
+	}
+	data, err := cli.call(ctx, "+record-list", table, args, map[string]any{"logic": "and", "conditions": conditions})
+	if err != nil {
+		return nil, err
+	}
+	more, ok := data["has_more"].(bool)
+	if !ok {
+		return nil, &FeishuArchiveFailure{Code: "FEISHU_RESPONSE_INVALID"}
+	}
+	if more {
+		return nil, &FeishuArchiveFailure{Code: "JOB_IDENTITY_AMBIGUOUS"}
+	}
+	records, err := decodeFeishuRecords(data)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, record := range records {
+		if record.ID == "" || seen[record.ID] {
+			return nil, &FeishuArchiveFailure{Code: "FEISHU_RESPONSE_INVALID"}
+		}
+		seen[record.ID] = true
+		for field, value := range match {
+			if record.Fields[field] != value {
+				return nil, &FeishuArchiveFailure{Code: "FEISHU_RESPONSE_INVALID"}
+			}
+		}
+	}
+	return records, nil
+}
+
 func (cli *FeishuArchiveCLI) Write(ctx context.Context, table, id string, fields map[string]any) (map[string]any, error) {
 	args := []string{}
 	if id != "" {

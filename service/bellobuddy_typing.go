@@ -59,6 +59,7 @@ type BelloBuddyTypingState struct {
 	CreatedAt           int64                     `json:"created_at"`
 	ExpiresAt           int64                     `json:"expires_at"`
 	InvitationDelivered bool                      `json:"invitation_delivered"`
+	InvitationMode      string                    `json:"invitation_mode,omitempty"`
 	RecordID            string                    `json:"record_id,omitempty"`
 	SyncedAttempt       string                    `json:"synced_attempt,omitempty"`
 	RetryAt             int64                     `json:"retry_at,omitempty"`
@@ -90,7 +91,7 @@ func typingScopeKey(target FeishuArchiveTarget, userID, accountID, jobID int, ca
 
 func NewBelloBuddyTypingEngine(resume *BelloBuddyResumeEngine, config BelloBuddyTypingConfig) (*BelloBuddyTypingEngine, error) {
 	u, err := url.Parse(config.PublicURL)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !filepath.IsAbs(config.DataDir) || len(config.EnabledModels) == 0 || utf8.RuneCountInString(config.Article) < 600 || utf8.RuneCountInString(config.Article) > 6000 {
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !filepath.IsAbs(config.DataDir) || utf8.RuneCountInString(config.Article) < 600 || utf8.RuneCountInString(config.Article) > 6000 {
 		return nil, errors.New("invalid typing configuration")
 	}
 	seenFields := map[string]bool{}
@@ -210,49 +211,82 @@ func (e *BelloBuddyTypingEngine) save(state *BelloBuddyTypingState) error {
 	return syncFeishuCreatedFile(filepath.Join(e.Config.DataDir, state.ScopeKey+".json"))
 }
 
-func (e *BelloBuddyTypingEngine) enabled(jobID int) bool {
-	var job model.BelloBuddyJob
-	var binding model.BelloBuddyJobBinding
-	return e.Resume.DB.First(&job, jobID).Error == nil && job.BindingID != 0 && e.Resume.DB.First(&binding, job.BindingID).Error == nil && binding.Enabled && slices.Contains(e.Config.EnabledModels, binding.Model)
+type BelloBuddyTypingInvitationInput struct {
+	JobVersion         int64    `json:"job_version"`
+	FilterPlanID       int      `json:"filter_plan_id"`
+	FilterVersion      int64    `json:"filter_version"`
+	SnapshotRef        string   `json:"snapshot_ref"`
+	CandidateID        string   `json:"candidate_id"`
+	CandidateName      string   `json:"candidate_name,omitempty"`
+	CandidateEducation string   `json:"candidate_education,omitempty"`
+	RecruiterMessages  []string `json:"recruiter_messages,omitempty"`
 }
 
-// Invitation eligibility is explicit client workflow state, not an LLM decision.
-func AddBelloBuddyTypingInvitation(scope BelloBuddyConversationScope, input BelloBuddyAIInput, text string) (string, error) {
+type BelloBuddyTypingInvitation struct {
+	InvitationID string `json:"invitation_id"`
+	State        string `json:"state"`
+	Text         string `json:"text"`
+	Link         string `json:"link"`
+}
+
+// The worker proves greeting/reply ordering before this call. The service independently
+// validates the logged-in account and the signed, explicitly enabled plan configuration.
+func PrepareBelloBuddyTypingInvitation(identity AuthIdentity, accountKey, jobID string, input BelloBuddyTypingInvitationInput) (*BelloBuddyTypingInvitation, error) {
 	e := CurrentBelloBuddyTypingEngine()
-	if e == nil || !e.enabled(scope.JobID) {
-		return text, nil
+	if e == nil {
+		return nil, &BelloBuddyError{http.StatusServiceUnavailable, "TYPING_UNAVAILABLE", "打字测评服务暂时不可用"}
 	}
-	var request struct {
-		Protocol  string `json:"protocol"`
-		Materials struct {
-			Candidate     map[string]any `json:"candidate"`
-			ResumeSummary map[string]any `json:"resume_summary"`
-		} `json:"materials"`
-		Responsibility struct {
-			Allowed bool `json:"typing_invitation_allowed"`
-		} `json:"responsibility"`
-		Messages []struct {
-			Role string `json:"role"`
-			Text string `json:"text"`
-		} `json:"messages"`
+	if input.JobVersion <= 0 || input.FilterPlanID <= 0 || input.FilterVersion <= 0 || ValidateBelloBuddyIdentifier(input.CandidateID) != nil || utf8.RuneCountInString(input.CandidateName) > 128 || utf8.RuneCountInString(input.CandidateEducation) > 128 || strings.ContainsAny(input.CandidateName+input.CandidateEducation, "\x00\r\n") || len(input.RecruiterMessages) > 256 {
+		return nil, belloInvalid("测评邀请的候选人或配置版本无效")
 	}
-	if common.UnmarshalJsonStr(input.Input, &request) != nil || request.Protocol != "bellobuddy-c2-v1" || !request.Responsibility.Allowed {
-		return text, nil
+	total := 0
+	for _, message := range input.RecruiterMessages {
+		total += len(message)
 	}
-	var reply map[string]common.RawMessage
-	if common.UnmarshalJsonStr(text, &reply) != nil {
-		return text, nil
+	if total > 128<<10 {
+		return nil, belloInvalid("测评邀请的聊天记录过长")
 	}
-	var replyText string
-	if common.Unmarshal(reply["reply_text"], &replyText) != nil {
-		return text, nil
+	snapshot, err := openBelloBuddySnapshot(input.SnapshotRef, identity, accountKey)
+	if err != nil {
+		return nil, err
 	}
-	if scope.CandidateHash != model.BelloBuddyIdentityHash(input.CandidateID) {
-		return text, errors.New("typing identity mismatch")
+	account, job, _, err := e.Resume.ownership(identity.UserID, accountKey, jobID)
+	if err != nil {
+		return nil, err
+	}
+	var frozenJob *belloBuddySnapshotJob
+	for i := range snapshot.Jobs {
+		if snapshot.Jobs[i].JobID == jobID {
+			frozenJob = &snapshot.Jobs[i]
+			break
+		}
+	}
+	filter, found := snapshot.Plans[input.FilterPlanID]
+	if snapshot.AccountID != account.ID || frozenJob == nil || frozenJob.ID != job.ID || frozenJob.Version != input.JobVersion || frozenJob.FilterMode != "plan" || frozenJob.FilterPlanID != input.FilterPlanID || !found || filter.Kind != "filter" || filter.Version != input.FilterVersion {
+		return nil, ErrBelloBuddySnapshotInvalid
+	}
+	if job.Version != input.JobVersion || job.FilterMode != "plan" || job.FilterPlanID != input.FilterPlanID {
+		return nil, ErrBelloBuddyConflict
+	}
+	currentFilter, err := GetBelloBuddyPlan(e.Resume.DB, identity.UserID, input.FilterPlanID, "filter", true)
+	if err != nil {
+		return nil, err
+	}
+	if currentFilter.Version != input.FilterVersion {
+		return nil, ErrBelloBuddyConflict
+	}
+	var settings struct {
+		EnableTyping bool `json:"enable_typing_assessment"`
+	}
+	if common.UnmarshalJsonStr(currentFilter.Content, &settings) != nil {
+		return nil, ErrBelloBuddyConfig
+	}
+	if !filter.EnableTyping || !settings.EnableTyping {
+		return nil, &BelloBuddyError{http.StatusConflict, "TYPING_NOT_ENABLED", "当前运行筛选方案未启用打字测评"}
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	key := typingScopeKey(e.Resume.Config.Target, scope.UserID, scope.AccountID, scope.JobID, input.CandidateID)
+	key := typingScopeKey(e.Resume.Config.Target, identity.UserID, account.ID, job.ID, input.CandidateID)
 	state := e.states[key]
 	if state != nil {
 		copyState := *state
@@ -262,54 +296,32 @@ func AddBelloBuddyTypingInvitation(scope BelloBuddyConversationScope, input Bell
 	if state == nil {
 		token, err := newTypingToken()
 		if err != nil {
-			return text, err
+			return nil, err
 		}
-		name, _ := request.Materials.Candidate["name"].(string)
-		if name == "" {
-			name, _ = request.Materials.Candidate["geekName"].(string)
-		}
-		education, _ := request.Materials.Candidate["degree"].(string)
-		if name == "" {
-			name, _ = request.Materials.ResumeSummary["name"].(string)
-		}
-		if utf8.RuneCountInString(name) > 128 || strings.ContainsAny(name, "\x00\r\n") {
-			return text, errors.New("invalid candidate name")
-		}
-		state = &BelloBuddyTypingState{ScopeKey: key, Token: token, UserID: scope.UserID, AccountID: scope.AccountID, JobID: scope.JobID, CandidateID: input.CandidateID, Name: name, Education: education, CreatedAt: e.now().Unix(), ExpiresAt: e.now().Add(7 * 24 * time.Hour).Unix(), Attempts: []BelloBuddyTypingAttempt{}}
+		state = &BelloBuddyTypingState{ScopeKey: key, Token: token, UserID: identity.UserID, AccountID: account.ID, JobID: job.ID, CandidateID: input.CandidateID, Name: input.CandidateName, Education: input.CandidateEducation, InvitationMode: "plan", CreatedAt: e.now().Unix(), ExpiresAt: e.now().Add(7 * 24 * time.Hour).Unix(), Attempts: []BelloBuddyTypingAttempt{}}
 	}
 	link := e.Config.PublicURL + "#" + state.Token
-	for _, message := range request.Messages {
-		if message.Role == "recruiter" && strings.Contains(message.Text, link) {
+	for _, message := range input.RecruiterMessages {
+		if strings.Contains(message, link) {
 			state.InvitationDelivered = true
-			if err := e.save(state); err != nil {
-				return text, err
-			}
-			e.states[key] = state
 			break
 		}
 	}
-	if state.InvitationDelivered || latestTypingResult(state) != nil {
-		return text, nil
-	}
-	if state.ExpiresAt <= e.now().Unix() {
-		return text, nil
+	result := &BelloBuddyTypingInvitation{InvitationID: state.ScopeKey, State: "ready", Link: link}
+	if latestTypingResult(state) != nil {
+		result.State = "completed"
+	} else if state.InvitationDelivered {
+		result.State = "sent"
+	} else if state.ExpiresAt <= e.now().Unix() {
+		return nil, &BelloBuddyError{http.StatusConflict, "TYPING_INVITATION_EXPIRED", "原测评邀请已过期，请由人事处理"}
+	} else {
+		result.Text = "方便的话，请完成一次60秒中文打字测评，帮助我们了解您的客服输入速度和准确率。点击即可开始，无需重复填写个人信息：\n" + link
 	}
 	if err := e.save(state); err != nil {
-		return text, err
+		return nil, err
 	}
 	e.states[key] = state
-	invitation := "方便的话，请完成一次60秒中文打字测评，帮助我们了解您的客服输入速度和准确率。点击即可开始，无需重复填写个人信息：\n" + link
-	if strings.TrimSpace(replyText) != "" {
-		replyText += "\n\n"
-	}
-	replyText += invitation
-	data, err := common.Marshal(replyText)
-	if err != nil {
-		return text, err
-	}
-	reply["reply_text"] = data
-	encoded, err := common.Marshal(reply)
-	return string(encoded), err
+	return result, nil
 }
 
 func latestTypingResult(state *BelloBuddyTypingState) *BelloBuddyTypingAttempt {
@@ -358,8 +370,8 @@ func (e *BelloBuddyTypingEngine) PublicCall(token, operation string, body []byte
 	copyState := *state
 	copyState.Attempts = slices.Clone(state.Attempts)
 	state = &copyState
-	if !e.enabled(state.JobID) {
-		return nil, typingFailure("该岗位的测评当前未启用，请联系招聘人员。", http.StatusConflict)
+	if _, _, _, err := e.stateOwnership(state); err != nil {
+		return nil, typingFailure("测评所属招聘信息不可用，请联系招聘人员。", http.StatusConflict)
 	}
 	if operation == "info" {
 		return e.publicState(state), nil
@@ -451,13 +463,19 @@ func (e *BelloBuddyTypingEngine) PublicCall(token, operation string, body []byte
 	return result, nil
 }
 
-// Only completed and synchronized assessments release attachment archival for opted-in jobs.
+// Preserve the historical model-based archival gate. A plan invitation never adds one.
 func RequireBelloBuddyTyping(jobID int, scopeKey string) error {
 	e := CurrentBelloBuddyTypingEngine()
 	if e == nil {
 		if os.Getenv("DPIN_TYPING_CONFIG") != "" {
 			return resumeUnknown("TYPING_CONFIG_UNAVAILABLE")
 		}
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	state := e.states[scopeKey]
+	if state == nil || state.InvitationMode == "plan" {
 		return nil
 	}
 	var job model.BelloBuddyJob
@@ -474,9 +492,6 @@ func RequireBelloBuddyTyping(jobID int, scopeKey string) error {
 	if !binding.Enabled || !slices.Contains(e.Config.EnabledModels, binding.Model) {
 		return nil
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	state := e.states[scopeKey]
 	if state == nil || latestTypingResult(state) == nil || state.RecordID == "" {
 		return resumeUnknown("TYPING_REQUIRED")
 	}
@@ -547,24 +562,30 @@ func (e *BelloBuddyTypingEngine) SyncOnce(ctx context.Context) error {
 	return nil
 }
 
-func (e *BelloBuddyTypingEngine) syncState(ctx context.Context, state *BelloBuddyTypingState) (string, error) {
+// Issued tickets remain usable after plan or model changes; account ownership is live.
+func (e *BelloBuddyTypingEngine) stateOwnership(state *BelloBuddyTypingState) (*model.BelloBuddyAccount, *model.BelloBuddyJob, *model.User, error) {
 	var account model.BelloBuddyAccount
 	var job model.BelloBuddyJob
 	var user model.User
 	if err := e.Resume.DB.First(&account, state.AccountID).Error; err != nil {
-		return "", err
+		return nil, nil, nil, err
 	}
 	if err := e.Resume.DB.First(&job, state.JobID).Error; err != nil {
-		return "", err
+		return nil, nil, nil, err
 	}
 	if err := e.Resume.DB.Select("id", "username", "status").First(&user, state.UserID).Error; err != nil {
-		return "", err
+		return nil, nil, nil, err
 	}
 	if user.Status != common.UserStatusEnabled || account.UserID != state.UserID || job.AccountID != account.ID {
-		return "", errors.New("typing ownership changed")
+		return nil, nil, nil, errors.New("typing ownership changed")
 	}
-	if !e.enabled(job.ID) {
-		return "", errors.New("typing job disabled")
+	return &account, &job, &user, nil
+}
+
+func (e *BelloBuddyTypingEngine) syncState(ctx context.Context, state *BelloBuddyTypingState) (string, error) {
+	account, job, user, err := e.stateOwnership(state)
+	if err != nil {
+		return "", err
 	}
 	target := e.Resume.Config.Target
 	var mapping model.BelloBuddyResumeJobMap

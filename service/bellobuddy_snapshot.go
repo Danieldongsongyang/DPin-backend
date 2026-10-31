@@ -48,6 +48,7 @@ type belloBuddySnapshotPlan struct {
 	Version      int64  `json:"version"`
 	FilterPlanID int    `json:"filter_plan_id"`
 	EnableAI     bool   `json:"enable_ai_screening"`
+	EnableTyping bool   `json:"enable_typing_assessment"`
 }
 
 // 只含服务端签发的路由决策，不存候选人、正文、招聘进度或认证凭据。
@@ -108,12 +109,13 @@ func IssueBelloBuddyRuntimeSnapshot(identity AuthIdentity, config *BelloBuddyRun
 	}
 	for _, plan := range config.Plans {
 		var settings struct {
-			EnableAI bool `json:"enable_ai_screening"`
+			EnableAI     bool `json:"enable_ai_screening"`
+			EnableTyping bool `json:"enable_typing_assessment"`
 		}
 		if plan.Kind == "filter" && common.Unmarshal(plan.Content, &settings) != nil {
 			return ErrBelloBuddyConfig
 		}
-		snapshot.Plans[plan.ID] = belloBuddySnapshotPlan{ID: plan.ID, Kind: plan.Kind, Version: plan.Version, FilterPlanID: plan.FilterPlanID, EnableAI: settings.EnableAI}
+		snapshot.Plans[plan.ID] = belloBuddySnapshotPlan{ID: plan.ID, Kind: plan.Kind, Version: plan.Version, FilterPlanID: plan.FilterPlanID, EnableAI: settings.EnableAI, EnableTyping: settings.EnableTyping}
 	}
 	credential, err := sealBelloBuddySnapshot(snapshot)
 	if err != nil {

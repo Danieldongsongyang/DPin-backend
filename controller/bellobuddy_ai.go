@@ -163,15 +163,6 @@ func BelloBuddyAIResponse() gin.HandlerFunc {
 			return
 		}
 		replyText := response.Choices[0].Message.Content
-		if input, ok := common.GetContextKeyType[service.BelloBuddyAIInput](c, "bello_typing_ai_input"); ok {
-			if text, isText := replyText.(string); isText {
-				if decorated, err := service.AddBelloBuddyTypingInvitation(route.Scope, input, text); err == nil {
-					replyText = decorated
-				} else {
-					common.SysError("typing: invitation could not be prepared; original answer preserved")
-				}
-			}
-		}
 		data := gin.H{
 			"text": replyText, "model": route.Model, "usage": response.Usage,
 			"conversation_ref": reference, "binding_version": route.Scope.BindingVersion,

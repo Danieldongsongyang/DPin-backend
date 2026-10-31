@@ -158,7 +158,6 @@ func prepareBelloBuddyAI(reply, guidance bool) gin.HandlerFunc {
 		c.Set("bello_relay_internal", true)
 		c.Set("bello_relay_token_id", token.Id)
 		c.Set("bello_ai_route", route)
-		c.Set("bello_typing_ai_input", input)
 		c.Set("bello_ai_reply", reply)
 		c.Set("bello_ai_guidance", guidance)
 		service.GetChannelConstraints(c).AddFilter(dto.ChannelFilter{Kind: dto.FilterChannelType, ChannelType: channelType})
